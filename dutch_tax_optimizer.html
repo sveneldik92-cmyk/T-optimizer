@@ -31,7 +31,7 @@
   <div class="w-full flex">
     <aside id="drawer" class="drawer closed md:static md:translate-x-0 md:open bg-white border-r w-80 md:w-96 h-[calc(100vh-120px)] scroll-y hidden">
       <div class="p-4 space-y-6">
-        <section>
+        <section data-lite-hide>
           <div class="flex items-center justify-between mb-2">
             <h2 class="font-semibold">Scenarios</h2>
             <button id="addScenario" class="text-xs px-2 py-1 border rounded">Add</button>
@@ -79,19 +79,19 @@
               </div>
               <div class="flex flex-wrap gap-2 text-xs">
                 <button id="exportProject" class="px-2 py-1 border rounded">Export project</button>
-                <button id="importProject" class="px-2 py-1 border rounded">Import project</button>
-                <button id="exportActionsCsv" class="px-2 py-1 border rounded">Download Actions CSV</button>
-                <button id="resetProject" class="px-2 py-1 border rounded text-rose-600">Reset</button>
-                <button id="exportVault" class="px-2 py-1 border rounded">Export vault</button>
-                <button id="importVault" class="px-2 py-1 border rounded">Import vault</button>
-                <button id="showDisclaimer" class="px-2 py-1 border rounded">View disclaimer</button>
+                <button id="importProject" class="px-2 py-1 border rounded lite-hide">Import project</button>
+                <button id="exportActionsCsv" class="px-2 py-1 border rounded lite-hide">Download Actions CSV</button>
+                <button id="resetProject" class="px-2 py-1 border rounded text-rose-600 lite-hide">Reset</button>
+                <button id="exportVault" class="px-2 py-1 border rounded lite-hide">Export vault</button>
+                <button id="importVault" class="px-2 py-1 border rounded lite-hide">Import vault</button>
+                <button id="showDisclaimer" class="px-2 py-1 border rounded lite-hide">View disclaimer</button>
               </div>
               <div class="text-xs text-slate-500">Scenario: Private Only (Box 3)</div>
               <div id="scenarioEditor" class="space-y-4"></div>
             </div>
           </details>
 
-          <details class="border rounded">
+          <details class="border rounded" data-lite-hide>
             <summary class="p-2 cursor-pointer font-semibold flex items-center justify-between">
               Tax System Settings (Advanced)
               <span class="text-xs text-slate-500">Editable per year</span>
@@ -107,7 +107,7 @@
             </div>
           </details>
 
-          <details class="border rounded">
+          <details class="border rounded" data-lite-hide>
             <summary class="p-2 cursor-pointer font-semibold">Scenario Vault</summary>
             <div class="p-3 space-y-3 text-xs">
               <div class="flex flex-wrap gap-2">
@@ -165,6 +165,7 @@
   </div>
 
   <script>
+    const LITE_MODE = true;
     const STORAGE_PROJECT = 'dto_project_v1';
     const STORAGE_VAULT = 'dto_vault_v1';
     const SCHEMA_VERSION = 2;
@@ -238,10 +239,10 @@
         policy: {
           spendingNeedGross: 40000,
           drawdownSplit: {
-            privateBank: 0.4,
-            privateOther: 0.2,
-            bvDividend: 0.2,
-            bvLoan: 0.2
+            privateBank: LITE_MODE ? 0.5 : 0.4,
+            privateOther: LITE_MODE ? 0.5 : 0.2,
+            bvDividend: LITE_MODE ? 0.0 : 0.2,
+            bvLoan: LITE_MODE ? 0.0 : 0.2
           },
           autoRebalance: true,
           dividendPolicy: 'manual',
@@ -455,6 +456,13 @@
       return JSON.parse(JSON.stringify(obj));
     }
 
+    function applyLiteModeUI() {
+      if (!LITE_MODE) return;
+      document.querySelectorAll('[data-lite-hide], .lite-hide').forEach((element) => {
+        element.classList.add('hidden');
+      });
+    }
+
     function downloadFile(filename, content, type = 'text/plain') {
       const blob = new Blob([content], { type });
       const url = URL.createObjectURL(blob);
@@ -508,6 +516,7 @@
         }
       }
       enforceSingleScenario();
+      applyLiteModeUI();
       bindGlobalInputs();
       bindVariableToggle();
       renderScenarioList();
@@ -534,9 +543,19 @@
         state.scenarios = deepClone(sampleScenarios).map((scenario) => normalizeScenario(scenario));
       }
       const primaryScenario = state.scenarios.find((scenario) => scenario.name === 'Private Only (Box 3)') || state.scenarios[0];
-      state.scenarios = [normalizeScenario(primaryScenario)];
-      state.scenarios[0].active = true;
-      state.scenarios[0].selected = true;
+      if (LITE_MODE) {
+        state.scenarios = [normalizeScenario(primaryScenario)];
+        state.scenarios[0].active = true;
+        state.scenarios[0].selected = true;
+        return;
+      }
+      state.scenarios = state.scenarios.map((scenario) => normalizeScenario(scenario));
+      if (!state.scenarios.some((scenario) => scenario.active)) {
+        state.scenarios[0].active = true;
+      }
+      if (!state.scenarios.some((scenario) => scenario.selected)) {
+        state.scenarios[0].selected = true;
+      }
     }
 
     function bindVariableToggle() {
@@ -599,6 +618,7 @@
       }
 
       document.getElementById('addScenario').addEventListener('click', () => {
+        if (LITE_MODE) return;
         const scenario = defaultScenario();
         scenario.name = `Scenario ${state.scenarios.length + 1}`;
         state.scenarios.push(scenario);
@@ -645,6 +665,7 @@
             state.globals = parsed.globals || state.globals;
             state.scenarios = (parsed.scenarios || []).map((scenario) => normalizeScenario(scenario));
             state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
+            enforceSingleScenario();
             saveProject();
             bindGlobalInputs();
             renderScenarioList();
@@ -705,6 +726,7 @@
         if (!confirm('Reset project to sample scenarios?')) return;
         state.scenarios = deepClone(sampleScenarios).map((scenario) => normalizeScenario(scenario));
         state.taxParamsByYear = structuredClone(defaultTaxParamsByYear);
+        enforceSingleScenario();
         saveProject();
         bindGlobalInputs();
         renderScenarioList();
@@ -862,13 +884,12 @@
         return;
       }
       scenario.selected = true;
-      ui.scenarioEditor.innerHTML = `
-        <details open class="border rounded">
-          <summary class="p-2 cursor-pointer font-semibold">General scenario variables</summary>
-          <div class="p-3 space-y-3">
-            <details open class="border rounded">
-              <summary class="p-2 cursor-pointer font-semibold text-xs">Starting State</summary>
-              <div class="p-2 space-y-2 text-xs">
+      if (LITE_MODE) {
+        scenario.decisionTimeline.mode = 'policy';
+        ui.scenarioEditor.innerHTML = `
+          <details open class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">Starting State</summary>
+            <div class="p-2 space-y-2 text-xs">
               <div class="grid grid-cols-2 gap-2">
                 <label class="space-y-1">Private bank
                   <input data-balance="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
@@ -893,105 +914,162 @@
                   <input data-balance="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
                 </label>
               </div>
-              <label class="space-y-1">Retained earnings (start)
-                <input data-balance="retainedEarningsStart" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.retainedEarningsStart}" />
-              </label>
-              <div class="space-y-1">
-                <div class="flex items-center justify-between">
-                  <span>Asset mix (Other assets)</span>
-                  <span class="text-slate-500">${Math.round(scenario.assetMix.equityShare * 100)}% equities</span>
-                </div>
-                <input data-mix="equityShare" type="range" min="0" max="100" value="${scenario.assetMix.equityShare * 100}" class="w-full" />
-                <div class="text-[11px] text-slate-500">Mix impacts Private Other return only.</div>
-              </div>
-              </div>
-            </details>
+            </div>
+          </details>
 
-            <details class="border rounded">
-              <summary class="p-2 cursor-pointer font-semibold text-xs">Return assumptions (% per year)</summary>
-              <div class="p-2 space-y-2 text-xs">
+          <details open class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold text-xs">Return assumptions (% per year)</summary>
+            <div class="p-2 space-y-2 text-xs">
               <div class="grid grid-cols-2 gap-2">
                 <label class="space-y-1">Private bank %
                   <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
                 </label>
-                <label class="space-y-1">Private other (manual) %
+                <label class="space-y-1">Private other %
                   <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
                 </label>
-                <label class="space-y-1">BV cash %
-                  <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
-                </label>
-                <label class="space-y-1">BV investments %
-                  <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
-                </label>
               </div>
-              <div class="grid grid-cols-2 gap-2">
-                <label class="space-y-1">Equity return %
-                  <input data-return="privateOtherEquity" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherEquity * 100}" />
-                </label>
-                <label class="space-y-1">Bond return %
-                  <input data-return="privateOtherBond" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherBond * 100}" />
-                </label>
-              </div>
-              <label class="flex items-center gap-2">
-                <input data-toggle="allowExtremeReturns" type="checkbox" class="border" ${scenario.allowExtremeReturns ? 'checked' : ''} />
-                Allow extreme returns (disable guardrails)
-              </label>
-              <div class="text-[11px] text-slate-500">Guardrails clamp to -50% / +25% unless enabled.</div>
-              </div>
-            </details>
-          </div>
-        </details>
+            </div>
+          </details>
 
-        <details class="border rounded">
-          <summary class="p-2 cursor-pointer font-semibold">Advanced scenario variables</summary>
-          <div class="p-3 space-y-4">
-            <details class="border rounded">
-              <summary class="p-2 cursor-pointer font-semibold text-xs">Decision Timeline (Policy + Overrides)</summary>
-              <div class="p-2 space-y-2 text-xs">
-                <div class="flex gap-2">
-                  <button data-timeline-mode="policy" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'policy' ? 'bg-slate-900 text-white' : ''}">Policy Mode</button>
-                  <button data-timeline-mode="overrides" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'overrides' ? 'bg-slate-900 text-white' : ''}">Overrides Mode</button>
+          <details open class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold text-xs">Spending plan</summary>
+            <div class="p-2 space-y-2 text-xs">
+              <div id="decisionTimelineEditor"></div>
+            </div>
+          </details>
+        `;
+      } else {
+        ui.scenarioEditor.innerHTML = `
+          <details open class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">General scenario variables</summary>
+            <div class="p-3 space-y-3">
+              <details open class="border rounded">
+                <summary class="p-2 cursor-pointer font-semibold text-xs">Starting State</summary>
+                <div class="p-2 space-y-2 text-xs">
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="space-y-1">Private bank
+                    <input data-balance="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
+                  </label>
+                  <label class="space-y-1">Private other
+                    <input data-balance="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
+                  </label>
                 </div>
-                <div id="decisionTimelineEditor"></div>
-              </div>
-            </details>
-
-            <section class="space-y-2">
-              <h3 class="font-semibold text-sm">Loans (existing agreements)</h3>
-              <div id="loanList" class="space-y-2"></div>
-              <button id="addLoan" class="text-xs border rounded px-2 py-1">Add loan</button>
-            </section>
-
-            <section class="space-y-2">
-              <h3 class="font-semibold text-sm">Scenario tax toggles</h3>
-              <label class="text-xs flex items-center gap-2">
-                <input id="box2Double" type="checkbox" class="border" ${scenario.box2UseDoubleLowBracket ? 'checked' : ''} />
-                Box 2 double low bracket (partners)
-              </label>
-              <label class="text-xs flex items-center gap-2">
-                <input id="allowLossCarryforward" type="checkbox" class="border" ${scenario.allowLossCarryforward ? 'checked' : ''} />
-                Allow BV loss carryforward
-              </label>
-              <div class="grid grid-cols-2 gap-2 text-xs">
-                <label class="space-y-1">Partner debt to BV €
-                  <input data-scenario="partnerDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.partnerDebtToBV}" />
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="space-y-1">Private debt (BV loans)
+                    <input data-balance="privateDebtBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtBV}" />
+                  </label>
+                  <label class="space-y-1">Private debt (other)
+                    <input data-balance="privateDebtOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtOther}" />
+                  </label>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="space-y-1">BV cash
+                    <input data-balance="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
+                  </label>
+                  <label class="space-y-1">BV investments
+                    <input data-balance="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
+                  </label>
+                </div>
+                <label class="space-y-1">Retained earnings (start)
+                  <input data-balance="retainedEarningsStart" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.retainedEarningsStart}" />
                 </label>
-                <label class="space-y-1">Connected persons debt €
-                  <input data-scenario="connectedPersonsDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.connectedPersonsDebtToBV}" />
-                </label>
-              </div>
-            </section>
+                <div class="space-y-1">
+                  <div class="flex items-center justify-between">
+                    <span>Asset mix (Other assets)</span>
+                    <span class="text-slate-500">${Math.round(scenario.assetMix.equityShare * 100)}% equities</span>
+                  </div>
+                  <input data-mix="equityShare" type="range" min="0" max="100" value="${scenario.assetMix.equityShare * 100}" class="w-full" />
+                  <div class="text-[11px] text-slate-500">Mix impacts Private Other return only.</div>
+                </div>
+                </div>
+              </details>
 
-            <section class="space-y-2">
-              <h3 class="font-semibold text-sm">Box 1 (optional)</h3>
-              <div class="text-xs text-slate-500">Use Decision Timeline salary policy for year-by-year planning.</div>
-              <label class="text-xs flex items-center gap-2">
-                <input id="box1UseBrackets" type="checkbox" class="border" ${scenario.box1UseBrackets ? 'checked' : ''} /> Use bracket table (else effective rate)
-              </label>
-            </section>
-          </div>
-        </details>
-      `;
+              <details class="border rounded">
+                <summary class="p-2 cursor-pointer font-semibold text-xs">Return assumptions (% per year)</summary>
+                <div class="p-2 space-y-2 text-xs">
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="space-y-1">Private bank %
+                    <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
+                  </label>
+                  <label class="space-y-1">Private other (manual) %
+                    <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
+                  </label>
+                  <label class="space-y-1">BV cash %
+                    <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
+                  </label>
+                  <label class="space-y-1">BV investments %
+                    <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
+                  </label>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="space-y-1">Equity return %
+                    <input data-return="privateOtherEquity" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherEquity * 100}" />
+                  </label>
+                  <label class="space-y-1">Bond return %
+                    <input data-return="privateOtherBond" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherBond * 100}" />
+                  </label>
+                </div>
+                <label class="flex items-center gap-2">
+                  <input data-toggle="allowExtremeReturns" type="checkbox" class="border" ${scenario.allowExtremeReturns ? 'checked' : ''} />
+                  Allow extreme returns (disable guardrails)
+                </label>
+                <div class="text-[11px] text-slate-500">Guardrails clamp to -50% / +25% unless enabled.</div>
+                </div>
+              </details>
+            </div>
+          </details>
+
+          <details class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">Advanced scenario variables</summary>
+            <div class="p-3 space-y-4">
+              <details class="border rounded">
+                <summary class="p-2 cursor-pointer font-semibold text-xs">Decision Timeline (Policy + Overrides)</summary>
+                <div class="p-2 space-y-2 text-xs">
+                  <div class="flex gap-2">
+                    <button data-timeline-mode="policy" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'policy' ? 'bg-slate-900 text-white' : ''}">Policy Mode</button>
+                    <button data-timeline-mode="overrides" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'overrides' ? 'bg-slate-900 text-white' : ''}">Overrides Mode</button>
+                  </div>
+                  <div id="decisionTimelineEditor"></div>
+                </div>
+              </details>
+
+              <section class="space-y-2">
+                <h3 class="font-semibold text-sm">Loans (existing agreements)</h3>
+                <div id="loanList" class="space-y-2"></div>
+                <button id="addLoan" class="text-xs border rounded px-2 py-1">Add loan</button>
+              </section>
+
+              <section class="space-y-2">
+                <h3 class="font-semibold text-sm">Scenario tax toggles</h3>
+                <label class="text-xs flex items-center gap-2">
+                  <input id="box2Double" type="checkbox" class="border" ${scenario.box2UseDoubleLowBracket ? 'checked' : ''} />
+                  Box 2 double low bracket (partners)
+                </label>
+                <label class="text-xs flex items-center gap-2">
+                  <input id="allowLossCarryforward" type="checkbox" class="border" ${scenario.allowLossCarryforward ? 'checked' : ''} />
+                  Allow BV loss carryforward
+                </label>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                  <label class="space-y-1">Partner debt to BV €
+                    <input data-scenario="partnerDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.partnerDebtToBV}" />
+                  </label>
+                  <label class="space-y-1">Connected persons debt €
+                    <input data-scenario="connectedPersonsDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.connectedPersonsDebtToBV}" />
+                  </label>
+                </div>
+              </section>
+
+              <section class="space-y-2">
+                <h3 class="font-semibold text-sm">Box 1 (optional)</h3>
+                <div class="text-xs text-slate-500">Use Decision Timeline salary policy for year-by-year planning.</div>
+                <label class="text-xs flex items-center gap-2">
+                  <input id="box1UseBrackets" type="checkbox" class="border" ${scenario.box1UseBrackets ? 'checked' : ''} /> Use bracket table (else effective rate)
+                </label>
+              </section>
+            </div>
+          </details>
+        `;
+      }
 
       ui.scenarioEditor.querySelectorAll('[data-balance]').forEach((input) => {
         input.addEventListener('input', (event) => {
@@ -1053,25 +1131,36 @@
         });
       });
 
-      ui.scenarioEditor.querySelector('#box2Double').addEventListener('change', (event) => {
-        scenario.box2UseDoubleLowBracket = event.target.checked;
-        saveProject();
-        runSimulation();
-      });
+      const box2Double = ui.scenarioEditor.querySelector('#box2Double');
+      if (box2Double) {
+        box2Double.addEventListener('change', (event) => {
+          scenario.box2UseDoubleLowBracket = event.target.checked;
+          saveProject();
+          runSimulation();
+        });
+      }
 
-      ui.scenarioEditor.querySelector('#allowLossCarryforward').addEventListener('change', (event) => {
-        scenario.allowLossCarryforward = event.target.checked;
-        saveProject();
-        runSimulation();
-      });
+      const allowLossCarryforward = ui.scenarioEditor.querySelector('#allowLossCarryforward');
+      if (allowLossCarryforward) {
+        allowLossCarryforward.addEventListener('change', (event) => {
+          scenario.allowLossCarryforward = event.target.checked;
+          saveProject();
+          runSimulation();
+        });
+      }
 
-      ui.scenarioEditor.querySelector('#box1UseBrackets').addEventListener('change', (event) => {
-        scenario.box1UseBrackets = event.target.checked;
-        saveProject();
-        runSimulation();
-      });
+      const box1UseBrackets = ui.scenarioEditor.querySelector('#box1UseBrackets');
+      if (box1UseBrackets) {
+        box1UseBrackets.addEventListener('change', (event) => {
+          scenario.box1UseBrackets = event.target.checked;
+          saveProject();
+          runSimulation();
+        });
+      }
 
-      renderLoanList(scenario);
+      if (!LITE_MODE) {
+        renderLoanList(scenario);
+      }
       renderDecisionTimelineEditor(scenario);
     }
 
@@ -1079,6 +1168,55 @@
       const container = ui.scenarioEditor.querySelector('#decisionTimelineEditor');
       if (!container) return;
       const timeline = scenario.decisionTimeline;
+      if (LITE_MODE) {
+        timeline.mode = 'policy';
+        container.innerHTML = `
+          <div class="grid grid-cols-2 gap-2">
+            <label class="space-y-1">Spending need gross €
+              <input data-policy="spendingNeedGross" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.spendingNeedGross}" />
+            </label>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">Drawdown source split (%)</div>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="space-y-1">Private bank
+                <input data-policy-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateBank * 100}" />
+              </label>
+              <label class="space-y-1">Private other
+                <input data-policy-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateOther * 100}" />
+              </label>
+              <label class="space-y-1">BV dividend
+                <input data-policy-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvDividend * 100}" />
+              </label>
+              <label class="space-y-1">BV loan
+                <input data-policy-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvLoan * 100}" />
+              </label>
+            </div>
+          </div>
+        `;
+
+        container.querySelectorAll('[data-policy]').forEach((input) => {
+          input.addEventListener('input', () => {
+            const field = input.dataset.policy;
+            timeline.policy[field] = Number(input.value || 0);
+            if (field === 'spendingNeedGross') {
+              timeline.policy[field] = Math.max(0, timeline.policy[field]);
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        container.querySelectorAll('[data-policy-split]').forEach((input) => {
+          input.addEventListener('input', () => {
+            const field = input.dataset.policySplit;
+            timeline.policy.drawdownSplit[field] = Number(input.value || 0) / 100;
+            saveProject();
+            runSimulation();
+          });
+        });
+        return;
+      }
       if (timeline.mode === 'policy') {
         container.innerHTML = `
           <div class="grid grid-cols-2 gap-2">
