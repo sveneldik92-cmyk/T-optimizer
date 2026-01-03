@@ -1,0 +1,1781 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dutch Tax Optimizer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .drawer { transition: transform 0.3s ease; }
+    .drawer.closed { transform: translateX(-100%); }
+    .sticky-topbar { position: sticky; top: 0; z-index: 40; }
+    .scroll-y { overflow-y: auto; }
+    .table-fixed { table-layout: fixed; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    details summary::-webkit-details-marker { display: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="sticky-topbar bg-white border-b shadow-sm">
+    <div class="max-w-screen-2xl mx-auto px-4 py-3 flex flex-col gap-2">
+      <div class="flex items-center gap-2">
+        <button id="drawerToggle" class="md:hidden p-2 rounded border">☰</button>
+        <h1 class="text-lg font-semibold">Dutch Tax Optimizer</h1>
+        <span class="ml-auto text-xs text-slate-500">Planning tool — verify with Belastingdienst/adviseur.</span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <div>
+          <label class="text-xs text-slate-500">Active scenarios (compare)</label>
+          <div id="activeScenarioTags" class="flex flex-wrap gap-1"></div>
+        </div>
+        <div class="flex items-end gap-2">
+          <div>
+            <label class="text-xs text-slate-500">Start Year</label>
+            <input id="startYear" type="number" class="w-full border rounded px-2 py-1" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Horizon (years)</label>
+            <input id="horizonYears" type="number" class="w-full border rounded px-2 py-1" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Inflation (%)</label>
+            <input id="inflation" type="number" step="0.1" class="w-full border rounded px-2 py-1" />
+          </div>
+        </div>
+        <div class="flex items-end gap-2">
+          <div>
+            <label class="text-xs text-slate-500">Taxpayers</label>
+            <select id="numTaxpayers" class="w-full border rounded px-2 py-1">
+              <option value="1">1</option>
+              <option value="2">2 (fiscal partners)</option>
+            </select>
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-slate-500">Project</label>
+            <div class="flex gap-2">
+              <button id="exportProject" class="px-2 py-1 border rounded text-xs">Export</button>
+              <button id="importProject" class="px-2 py-1 border rounded text-xs">Import</button>
+              <button id="resetProject" class="px-2 py-1 border rounded text-xs text-rose-600">Reset</button>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-end gap-2">
+          <div class="flex-1">
+            <label class="text-xs text-slate-500">Scenario Vault</label>
+            <div class="flex gap-2">
+              <button id="exportVault" class="px-2 py-1 border rounded text-xs">Export</button>
+              <button id="importVault" class="px-2 py-1 border rounded text-xs">Import</button>
+            </div>
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-slate-500">Disclaimer</label>
+            <button id="showDisclaimer" class="px-2 py-1 border rounded text-xs">View</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-screen-2xl mx-auto flex">
+    <aside id="drawer" class="drawer closed md:static md:translate-x-0 md:open bg-white border-r w-80 md:w-96 h-[calc(100vh-120px)] scroll-y">
+      <div class="p-4 space-y-6">
+        <section>
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="font-semibold">Scenarios</h2>
+            <button id="addScenario" class="text-xs px-2 py-1 border rounded">Add</button>
+          </div>
+          <div id="scenarioList" class="space-y-2"></div>
+          <div class="mt-2 grid grid-cols-3 gap-2">
+            <button data-preset="1000000" class="presetBtn text-xs border rounded px-2 py-1">Preset €1M</button>
+            <button data-preset="2000000" class="presetBtn text-xs border rounded px-2 py-1">Preset €2M</button>
+            <button data-preset="4000000" class="presetBtn text-xs border rounded px-2 py-1">Preset €4M</button>
+          </div>
+        </section>
+
+        <section id="scenarioEditor" class="space-y-4"></section>
+
+        <section>
+          <details class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold flex items-center justify-between">
+              Tax System Settings (Advanced)
+              <span class="text-xs text-slate-500">Editable per year</span>
+            </summary>
+            <div class="p-2 space-y-3">
+              <div class="flex items-center gap-2">
+                <select id="taxYearSelect" class="border rounded px-2 py-1 w-28"></select>
+                <button id="addTaxYear" class="text-xs border rounded px-2 py-1">Add custom year</button>
+                <button id="copyTaxYear" class="text-xs border rounded px-2 py-1">Copy to future</button>
+                <button id="resetTaxDefaults" class="text-xs border rounded px-2 py-1 text-rose-600">Reset defaults</button>
+              </div>
+              <div id="taxParamsEditor" class="space-y-2"></div>
+            </div>
+          </details>
+        </section>
+
+        <section>
+          <h2 class="font-semibold mb-2">Scenario Vault</h2>
+          <div class="space-y-2">
+            <button id="saveScenarioToVault" class="w-full text-xs border rounded px-2 py-1">Save current scenario</button>
+            <button id="saveSnapshotToVault" class="w-full text-xs border rounded px-2 py-1">Save snapshot</button>
+          </div>
+          <div id="vaultList" class="mt-3 space-y-2"></div>
+        </section>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-4 space-y-6">
+      <section>
+        <h2 class="font-semibold mb-2">KPIs</h2>
+        <div id="kpiCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+      </section>
+
+      <section>
+        <h2 class="font-semibold mb-2">Wealth & Tax Chart</h2>
+        <div class="bg-white border rounded p-3">
+          <canvas id="taxChart" height="120"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-semibold">Year-by-year table</h2>
+          <label class="text-xs flex items-center gap-2">
+            <input id="toggleBreakdown" type="checkbox" class="border" /> Show breakdown columns
+          </label>
+        </div>
+        <div class="bg-white border rounded overflow-x-auto">
+          <table class="min-w-full text-xs table-fixed" id="yearTable"></table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal" class="fixed inset-0 hidden items-center justify-center bg-black/40">
+    <div class="bg-white p-4 rounded w-[90vw] max-w-xl space-y-3">
+      <h3 id="modalTitle" class="font-semibold"></h3>
+      <textarea id="modalTextarea" class="w-full border rounded p-2 h-48 mono"></textarea>
+      <input id="modalFile" type="file" class="hidden" />
+      <div class="flex justify-end gap-2">
+        <button id="modalCancel" class="px-3 py-1 border rounded">Cancel</button>
+        <button id="modalConfirm" class="px-3 py-1 border rounded bg-slate-900 text-white">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_PROJECT = 'dto_project_v1';
+    const STORAGE_VAULT = 'dto_vault_v1';
+
+    const defaultTaxParamsByYear = {
+      2026: {
+        box3TaxRate: 0.36,
+        box3AllowancePerPerson: 57000,
+        box3DebtThresholdPerPerson: 3400,
+        deemedReturnBank: 0.01,
+        deemedReturnOther: 0.057,
+        deemedReturnDebt: 0.024,
+        citBrackets: [
+          { upTo: 200000, rate: 0.19 },
+          { upTo: Infinity, rate: 0.258 }
+        ],
+        dividendWithholdingRate: 0.15,
+        box2Brackets: [
+          { upTo: 68843, rate: 0.24 },
+          { upTo: Infinity, rate: 0.312 }
+        ],
+        box2LowBracketThreshold: 68843,
+        excessBorrowingBaseThreshold: 500000,
+        excludePrincipalResidenceLoansIfQualified: true,
+        allowThresholdCarryMechanism: true,
+        includePartnerDebtInDebtSum: true,
+        connectedPersonsDebtIncluded: false,
+        dgaSalaryDefault: 58000,
+        box1Enabled: false,
+        box1EffectiveRate: 0.37,
+        box1Brackets: [
+          { upTo: 75000, rate: 0.37 },
+          { upTo: Infinity, rate: 0.495 }
+        ]
+      }
+    };
+
+    const defaultScenario = () => ({
+      id: crypto.randomUUID(),
+      name: 'New Scenario',
+      notes: '',
+      active: true,
+      box2UseDoubleLowBracket: true,
+      balances: {
+        privateBank: 500000,
+        privateOther: 500000,
+        privateDebt: 0,
+        bvCash: 100000,
+        bvInvestments: 0
+      },
+      returns: {
+        privateBank: 0.01,
+        privateOther: 0.05,
+        bvCash: 0.01,
+        bvInvestments: 0.05
+      },
+      loans: [],
+      drawdownMode: 'simple',
+      drawdownSimple: {
+        amount: 40000,
+        split: {
+          privateBank: 0.4,
+          privateOther: 0.2,
+          bvDividend: 0.2,
+          bvLoan: 0.2
+        },
+        autoRebalance: true
+      },
+      drawdownAdvanced: {},
+      dgaSalaryEnabled: false,
+      dgaSalaryAmount: 0,
+      addNetIncomeToPrivateBank: false,
+      box1UseBrackets: false,
+      partnerDebtToBV: 0,
+      connectedPersonsDebtToBV: 0
+    });
+
+    const sampleScenarios = [
+      {
+        id: crypto.randomUUID(),
+        name: 'Private Only (Box 3)',
+        notes: '€2M split bank/other',
+        active: true,
+        box2UseDoubleLowBracket: true,
+        balances: {
+          privateBank: 1000000,
+          privateOther: 1000000,
+          privateDebt: 0,
+          bvCash: 0,
+          bvInvestments: 0
+        },
+        returns: {
+          privateBank: 0.01,
+          privateOther: 0.05,
+          bvCash: 0.0,
+          bvInvestments: 0.0
+        },
+        loans: [],
+        drawdownMode: 'simple',
+        drawdownSimple: {
+          amount: 30000,
+          split: {
+            privateBank: 0.5,
+            privateOther: 0.5,
+            bvDividend: 0.0,
+            bvLoan: 0.0
+          },
+          autoRebalance: true
+        },
+        drawdownAdvanced: {},
+        dgaSalaryEnabled: false,
+        dgaSalaryAmount: 0,
+        addNetIncomeToPrivateBank: false,
+        box1UseBrackets: false,
+        partnerDebtToBV: 0,
+        connectedPersonsDebtToBV: 0
+      },
+      {
+        id: crypto.randomUUID(),
+        name: 'BV Only (retain profits)',
+        notes: '€2M in BV investments',
+        active: true,
+        box2UseDoubleLowBracket: true,
+        balances: {
+          privateBank: 10000,
+          privateOther: 0,
+          privateDebt: 0,
+          bvCash: 200000,
+          bvInvestments: 1800000
+        },
+        returns: {
+          privateBank: 0.01,
+          privateOther: 0.0,
+          bvCash: 0.01,
+          bvInvestments: 0.05
+        },
+        loans: [],
+        drawdownMode: 'simple',
+        drawdownSimple: {
+          amount: 20000,
+          split: {
+            privateBank: 0.2,
+            privateOther: 0.0,
+            bvDividend: 0.8,
+            bvLoan: 0.0
+          },
+          autoRebalance: true
+        },
+        drawdownAdvanced: {},
+        dgaSalaryEnabled: false,
+        dgaSalaryAmount: 0,
+        addNetIncomeToPrivateBank: false,
+        box1UseBrackets: false,
+        partnerDebtToBV: 0,
+        connectedPersonsDebtToBV: 0
+      },
+      {
+        id: crypto.randomUUID(),
+        name: 'Mixed + Dividend + Loan (excess check)',
+        notes: 'Loan near threshold, dividend plan',
+        active: true,
+        box2UseDoubleLowBracket: true,
+        balances: {
+          privateBank: 400000,
+          privateOther: 300000,
+          privateDebt: 100000,
+          bvCash: 150000,
+          bvInvestments: 900000
+        },
+        returns: {
+          privateBank: 0.01,
+          privateOther: 0.05,
+          bvCash: 0.01,
+          bvInvestments: 0.05
+        },
+        loans: [
+          {
+            id: crypto.randomUUID(),
+            direction: 'BV->Private',
+            principal: 450000,
+            interestRate: 0.03,
+            startYear: 2026,
+            amortizationType: 'interestOnly',
+            amortizationYears: 0,
+            loanType: 'general'
+          }
+        ],
+        drawdownMode: 'simple',
+        drawdownSimple: {
+          amount: 50000,
+          split: {
+            privateBank: 0.3,
+            privateOther: 0.2,
+            bvDividend: 0.4,
+            bvLoan: 0.1
+          },
+          autoRebalance: true
+        },
+        drawdownAdvanced: {},
+        dgaSalaryEnabled: false,
+        dgaSalaryAmount: 0,
+        addNetIncomeToPrivateBank: false,
+        box1UseBrackets: false,
+        partnerDebtToBV: 0,
+        connectedPersonsDebtToBV: 0
+      }
+    ];
+
+    const state = {
+      globals: {
+        startYear: 2026,
+        horizonYears: 30,
+        inflation: 0.02,
+        numTaxpayers: 2
+      },
+      scenarios: [],
+      taxParamsByYear: structuredClone(defaultTaxParamsByYear),
+      vault: []
+    };
+
+    const ui = {
+      drawer: document.getElementById('drawer'),
+      drawerToggle: document.getElementById('drawerToggle'),
+      scenarioList: document.getElementById('scenarioList'),
+      scenarioEditor: document.getElementById('scenarioEditor'),
+      kpiCards: document.getElementById('kpiCards'),
+      taxYearSelect: document.getElementById('taxYearSelect'),
+      taxParamsEditor: document.getElementById('taxParamsEditor'),
+      yearTable: document.getElementById('yearTable'),
+      toggleBreakdown: document.getElementById('toggleBreakdown'),
+      activeScenarioTags: document.getElementById('activeScenarioTags'),
+      vaultList: document.getElementById('vaultList')
+    };
+
+    const numberFormat = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 0 });
+    const percentFormat = new Intl.NumberFormat('nl-NL', { style: 'percent', maximumFractionDigits: 2 });
+
+    function formatCurrency(value) {
+      return '€' + numberFormat.format(value || 0);
+    }
+
+    function formatPercent(value) {
+      return percentFormat.format(value || 0);
+    }
+
+    function deepClone(obj) {
+      return JSON.parse(JSON.stringify(obj));
+    }
+
+    function init() {
+      const stored = localStorage.getItem(STORAGE_PROJECT);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          state.globals = parsed.globals;
+          state.scenarios = parsed.scenarios;
+          state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
+        } catch (error) {
+          console.warn('Failed to load project, using defaults', error);
+          state.scenarios = deepClone(sampleScenarios);
+        }
+      } else {
+        state.scenarios = deepClone(sampleScenarios);
+      }
+      const vaultStored = localStorage.getItem(STORAGE_VAULT);
+      if (vaultStored) {
+        try {
+          state.vault = JSON.parse(vaultStored);
+        } catch (error) {
+          console.warn('Failed to load vault', error);
+          state.vault = [];
+        }
+      }
+      bindGlobalInputs();
+      renderScenarioList();
+      renderTaxParamsEditor();
+      renderVault();
+      runSimulation();
+    }
+
+    function saveProject() {
+      localStorage.setItem(STORAGE_PROJECT, JSON.stringify({
+        globals: state.globals,
+        scenarios: state.scenarios,
+        taxParamsByYear: state.taxParamsByYear
+      }));
+    }
+
+    function saveVault() {
+      localStorage.setItem(STORAGE_VAULT, JSON.stringify(state.vault));
+    }
+
+    function bindGlobalInputs() {
+      document.getElementById('startYear').value = state.globals.startYear;
+      document.getElementById('horizonYears').value = state.globals.horizonYears;
+      document.getElementById('inflation').value = state.globals.inflation * 100;
+      document.getElementById('numTaxpayers').value = state.globals.numTaxpayers;
+
+      document.getElementById('startYear').addEventListener('input', (event) => {
+        state.globals.startYear = Number(event.target.value || 0);
+        saveProject();
+        renderTaxYearOptions();
+        runSimulation();
+      });
+      document.getElementById('horizonYears').addEventListener('input', (event) => {
+        state.globals.horizonYears = Number(event.target.value || 0);
+        saveProject();
+        runSimulation();
+      });
+      document.getElementById('inflation').addEventListener('input', (event) => {
+        state.globals.inflation = Number(event.target.value || 0) / 100;
+        saveProject();
+        runSimulation();
+      });
+      document.getElementById('numTaxpayers').addEventListener('change', (event) => {
+        state.globals.numTaxpayers = Number(event.target.value);
+        saveProject();
+        runSimulation();
+      });
+
+      document.getElementById('addScenario').addEventListener('click', () => {
+        const scenario = defaultScenario();
+        scenario.name = `Scenario ${state.scenarios.length + 1}`;
+        state.scenarios.push(scenario);
+        renderScenarioList();
+        selectScenario(scenario.id);
+        saveProject();
+        runSimulation();
+      });
+
+      document.querySelectorAll('.presetBtn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const scenario = getActiveScenario();
+          if (!scenario) return;
+          const preset = Number(btn.dataset.preset || 0);
+          scenario.balances.privateBank = preset * 0.6;
+          scenario.balances.privateOther = preset * 0.4;
+          scenario.balances.bvCash = 0;
+          scenario.balances.bvInvestments = 0;
+          renderScenarioEditor(scenario);
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      ui.drawerToggle.addEventListener('click', () => {
+        ui.drawer.classList.toggle('closed');
+      });
+
+      document.getElementById('exportProject').addEventListener('click', () => {
+        openModal('Export Project JSON', JSON.stringify({
+          globals: state.globals,
+          scenarios: state.scenarios,
+          taxParamsByYear: state.taxParamsByYear
+        }, null, 2), (text) => {
+          navigator.clipboard.writeText(text);
+        });
+      });
+
+      document.getElementById('importProject').addEventListener('click', () => {
+        openModal('Import Project JSON', '', (text) => {
+          try {
+            const parsed = JSON.parse(text);
+            state.globals = parsed.globals;
+            state.scenarios = parsed.scenarios;
+            state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
+            saveProject();
+            bindGlobalInputs();
+            renderScenarioList();
+            renderTaxParamsEditor();
+            runSimulation();
+          } catch (error) {
+            alert('Invalid JSON');
+          }
+        }, true);
+      });
+
+      document.getElementById('resetProject').addEventListener('click', () => {
+        if (!confirm('Reset project to sample scenarios?')) return;
+        state.scenarios = deepClone(sampleScenarios);
+        state.taxParamsByYear = structuredClone(defaultTaxParamsByYear);
+        saveProject();
+        bindGlobalInputs();
+        renderScenarioList();
+        renderTaxParamsEditor();
+        runSimulation();
+      });
+
+      document.getElementById('exportVault').addEventListener('click', () => {
+        openModal('Export Vault JSON', JSON.stringify(state.vault, null, 2), (text) => {
+          navigator.clipboard.writeText(text);
+        });
+      });
+
+      document.getElementById('importVault').addEventListener('click', () => {
+        openModal('Import Vault JSON', '', (text) => {
+          try {
+            state.vault = JSON.parse(text);
+            saveVault();
+            renderVault();
+          } catch (error) {
+            alert('Invalid JSON');
+          }
+        }, true);
+      });
+
+      document.getElementById('saveScenarioToVault').addEventListener('click', () => {
+        const scenario = getActiveScenario();
+        if (!scenario) return;
+        const name = prompt('Vault name', scenario.name);
+        if (!name) return;
+        state.vault.push({
+          id: crypto.randomUUID(),
+          name,
+          notes: scenario.notes || '',
+          timestamp: new Date().toISOString(),
+          snapshot: false,
+          scenario: deepClone(scenario)
+        });
+        saveVault();
+        renderVault();
+      });
+
+      document.getElementById('saveSnapshotToVault').addEventListener('click', () => {
+        const scenario = getActiveScenario();
+        if (!scenario) return;
+        const name = prompt('Snapshot name', `${scenario.name} (snapshot)`);
+        if (!name) return;
+        state.vault.push({
+          id: crypto.randomUUID(),
+          name,
+          notes: scenario.notes || '',
+          timestamp: new Date().toISOString(),
+          snapshot: true,
+          scenario: deepClone(scenario)
+        });
+        saveVault();
+        renderVault();
+      });
+
+      document.getElementById('showDisclaimer').addEventListener('click', () => {
+        alert('Planning tool only. Tax rules change and depend on personal circumstances. Verify with Belastingdienst/adviseur.');
+      });
+
+      document.getElementById('toggleBreakdown').addEventListener('change', () => {
+        runSimulation();
+      });
+    }
+
+    function renderScenarioList() {
+      ui.scenarioList.innerHTML = '';
+      state.scenarios.forEach((scenario) => {
+        const card = document.createElement('div');
+        card.className = 'border rounded p-2 space-y-1';
+        card.innerHTML = `
+          <div class="flex items-center gap-2">
+            <input type="checkbox" ${scenario.active ? 'checked' : ''} data-action="toggle" class="border" />
+            <input type="text" class="border rounded px-2 py-1 w-full text-xs" value="${scenario.name}" data-action="rename" />
+          </div>
+          <div class="flex gap-2 text-xs">
+            <button data-action="select" class="border rounded px-2 py-1">Edit</button>
+            <button data-action="duplicate" class="border rounded px-2 py-1">Duplicate</button>
+            <button data-action="delete" class="border rounded px-2 py-1 text-rose-600">Delete</button>
+          </div>
+        `;
+        card.querySelector('[data-action="select"]').addEventListener('click', () => selectScenario(scenario.id));
+        card.querySelector('[data-action="duplicate"]').addEventListener('click', () => {
+          const clone = deepClone(scenario);
+          clone.id = crypto.randomUUID();
+          clone.name = `${scenario.name} (copy)`;
+          state.scenarios.push(clone);
+          saveProject();
+          renderScenarioList();
+          runSimulation();
+        });
+        card.querySelector('[data-action="delete"]').addEventListener('click', () => {
+          if (!confirm('Delete scenario?')) return;
+          state.scenarios = state.scenarios.filter((item) => item.id !== scenario.id);
+          saveProject();
+          renderScenarioList();
+          renderScenarioEditor(getActiveScenario());
+          runSimulation();
+        });
+        card.querySelector('[data-action="toggle"]').addEventListener('change', (event) => {
+          scenario.active = event.target.checked;
+          saveProject();
+          runSimulation();
+        });
+        card.querySelector('[data-action="rename"]').addEventListener('input', (event) => {
+          scenario.name = event.target.value;
+          saveProject();
+          runSimulation();
+        });
+        ui.scenarioList.appendChild(card);
+      });
+      renderScenarioEditor(getActiveScenario());
+      renderActiveScenarioTags();
+    }
+
+    function renderActiveScenarioTags() {
+      ui.activeScenarioTags.innerHTML = '';
+      state.scenarios.filter((scenario) => scenario.active).forEach((scenario) => {
+        const tag = document.createElement('span');
+        tag.className = 'text-xs bg-slate-100 px-2 py-1 rounded border';
+        tag.textContent = scenario.name;
+        ui.activeScenarioTags.appendChild(tag);
+      });
+    }
+
+    function selectScenario(id) {
+      state.scenarios.forEach((scenario) => {
+        scenario.selected = scenario.id === id;
+      });
+      renderScenarioList();
+      renderScenarioEditor(getActiveScenario());
+    }
+
+    function getActiveScenario() {
+      return state.scenarios.find((scenario) => scenario.selected) || state.scenarios[0];
+    }
+
+    function renderScenarioEditor(scenario) {
+      if (!scenario) {
+        ui.scenarioEditor.innerHTML = '<p class="text-xs text-slate-500">No scenario selected.</p>';
+        return;
+      }
+      scenario.selected = true;
+      ui.scenarioEditor.innerHTML = `
+        <section class="space-y-2">
+          <h3 class="font-semibold">Primary Settings</h3>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <label class="space-y-1">Private bank
+              <input data-field="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
+            </label>
+            <label class="space-y-1">Private other
+              <input data-field="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
+            </label>
+            <label class="space-y-1">Deductible debts
+              <input data-field="privateDebt" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebt}" />
+            </label>
+            <label class="space-y-1">BV cash
+              <input data-field="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
+            </label>
+            <label class="space-y-1">BV investments
+              <input data-field="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
+            </label>
+          </div>
+        </section>
+
+        <section class="space-y-2">
+          <h3 class="font-semibold">Return assumptions</h3>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <label class="space-y-1">Private bank %
+              <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
+            </label>
+            <label class="space-y-1">Private other %
+              <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
+            </label>
+            <label class="space-y-1">BV cash %
+              <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
+            </label>
+            <label class="space-y-1">BV investments %
+              <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
+            </label>
+          </div>
+        </section>
+
+        <section class="space-y-2">
+          <h3 class="font-semibold">Loans</h3>
+          <div id="loanList" class="space-y-2"></div>
+          <button id="addLoan" class="text-xs border rounded px-2 py-1">Add loan</button>
+        </section>
+
+        <section class="space-y-2">
+          <h3 class="font-semibold">Drawdown planner</h3>
+          <div class="flex gap-2 text-xs">
+            <button data-mode="simple" class="drawdownMode border rounded px-2 py-1 ${scenario.drawdownMode === 'simple' ? 'bg-slate-900 text-white' : ''}">Simple rule</button>
+            <button data-mode="advanced" class="drawdownMode border rounded px-2 py-1 ${scenario.drawdownMode === 'advanced' ? 'bg-slate-900 text-white' : ''}">Advanced table</button>
+          </div>
+          <div id="drawdownEditor"></div>
+        </section>
+
+        <section class="space-y-2">
+          <h3 class="font-semibold">Scenario tax toggles</h3>
+          <label class="text-xs flex items-center gap-2">
+            <input id="box2Double" type="checkbox" class="border" ${scenario.box2UseDoubleLowBracket ? 'checked' : ''} />
+            Box 2 double low bracket (partners)
+          </label>
+        </section>
+
+        <section class="space-y-2">
+          <h3 class="font-semibold">Box 1 (optional)</h3>
+          <label class="text-xs flex items-center gap-2">
+            <input id="dgaSalaryEnabled" type="checkbox" class="border" ${scenario.dgaSalaryEnabled ? 'checked' : ''} /> Enable DGA salary (Box 1)
+          </label>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <label class="space-y-1">Manual salary €
+              <input id="dgaSalaryAmount" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.dgaSalaryAmount}" />
+            </label>
+            <button id="autoFillSalary" class="text-xs border rounded px-2 py-1 mt-5">Auto-fill gebruikelijk loon</button>
+          </div>
+          <label class="text-xs flex items-center gap-2">
+            <input id="box1UseBrackets" type="checkbox" class="border" ${scenario.box1UseBrackets ? 'checked' : ''} /> Use bracket table (else effective rate)
+          </label>
+          <label class="text-xs flex items-center gap-2">
+            <input id="addNetIncome" type="checkbox" class="border" ${scenario.addNetIncomeToPrivateBank ? 'checked' : ''} /> Add net income to private bank
+          </label>
+        </section>
+      `;
+
+      ui.scenarioEditor.querySelectorAll('[data-field]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          const field = event.target.dataset.field;
+          scenario.balances[field] = Number(event.target.value || 0);
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      ui.scenarioEditor.querySelectorAll('[data-return]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          const field = event.target.dataset.return;
+          scenario.returns[field] = Number(event.target.value || 0) / 100;
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      ui.scenarioEditor.querySelectorAll('.drawdownMode').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          scenario.drawdownMode = btn.dataset.mode;
+          renderScenarioEditor(scenario);
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      ui.scenarioEditor.querySelector('#box2Double').addEventListener('change', (event) => {
+        scenario.box2UseDoubleLowBracket = event.target.checked;
+        saveProject();
+        runSimulation();
+      });
+
+      ui.scenarioEditor.querySelector('#dgaSalaryEnabled').addEventListener('change', (event) => {
+        scenario.dgaSalaryEnabled = event.target.checked;
+        saveProject();
+        runSimulation();
+      });
+
+      ui.scenarioEditor.querySelector('#dgaSalaryAmount').addEventListener('input', (event) => {
+        scenario.dgaSalaryAmount = Number(event.target.value || 0);
+        saveProject();
+        runSimulation();
+      });
+
+      ui.scenarioEditor.querySelector('#autoFillSalary').addEventListener('click', () => {
+        const params = getTaxParamsForYear(state.globals.startYear);
+        scenario.dgaSalaryAmount = params.dgaSalaryDefault || 0;
+        renderScenarioEditor(scenario);
+        saveProject();
+        runSimulation();
+      });
+
+      ui.scenarioEditor.querySelector('#box1UseBrackets').addEventListener('change', (event) => {
+        scenario.box1UseBrackets = event.target.checked;
+        saveProject();
+        runSimulation();
+      });
+
+      ui.scenarioEditor.querySelector('#addNetIncome').addEventListener('change', (event) => {
+        scenario.addNetIncomeToPrivateBank = event.target.checked;
+        saveProject();
+        runSimulation();
+      });
+
+      renderLoanList(scenario);
+      renderDrawdownEditor(scenario);
+    }
+
+    function renderLoanList(scenario) {
+      const loanList = ui.scenarioEditor.querySelector('#loanList');
+      loanList.innerHTML = '';
+      scenario.loans.forEach((loan) => {
+        const row = document.createElement('div');
+        row.className = 'border rounded p-2 text-xs grid grid-cols-2 gap-2';
+        row.innerHTML = `
+          <label class="space-y-1">Direction
+            <select data-loan="direction" class="border rounded px-2 py-1 w-full">
+              <option ${loan.direction === 'BV->Private' ? 'selected' : ''}>BV->Private</option>
+              <option ${loan.direction === 'Private->BV' ? 'selected' : ''}>Private->BV</option>
+            </select>
+          </label>
+          <label class="space-y-1">Principal €
+            <input data-loan="principal" type="number" class="border rounded px-2 py-1 w-full" value="${loan.principal}" />
+          </label>
+          <label class="space-y-1">Interest rate %
+            <input data-loan="interestRate" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${loan.interestRate * 100}" />
+          </label>
+          <label class="space-y-1">Start year
+            <input data-loan="startYear" type="number" class="border rounded px-2 py-1 w-full" value="${loan.startYear}" />
+          </label>
+          <label class="space-y-1">Amortization
+            <select data-loan="amortizationType" class="border rounded px-2 py-1 w-full">
+              <option value="interestOnly" ${loan.amortizationType === 'interestOnly' ? 'selected' : ''}>Interest-only</option>
+              <option value="linear" ${loan.amortizationType === 'linear' ? 'selected' : ''}>Linear</option>
+            </select>
+          </label>
+          <label class="space-y-1">Amort years
+            <input data-loan="amortizationYears" type="number" class="border rounded px-2 py-1 w-full" value="${loan.amortizationYears || 0}" />
+          </label>
+          <label class="space-y-1">Loan type
+            <select data-loan="loanType" class="border rounded px-2 py-1 w-full">
+              <option value="general" ${loan.loanType === 'general' ? 'selected' : ''}>General</option>
+              <option value="principalResidence" ${loan.loanType === 'principalResidence' ? 'selected' : ''}>Principal residence</option>
+            </select>
+          </label>
+          <button data-loan="delete" class="text-rose-600 border rounded px-2 py-1 mt-4">Delete</button>
+        `;
+        row.querySelectorAll('[data-loan]').forEach((input) => {
+          if (input.dataset.loan === 'delete') {
+            input.addEventListener('click', () => {
+              scenario.loans = scenario.loans.filter((item) => item.id !== loan.id);
+              saveProject();
+              renderLoanList(scenario);
+              runSimulation();
+            });
+            return;
+          }
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.loan;
+            if (field === 'interestRate') {
+              loan[field] = Number(event.target.value || 0) / 100;
+            } else if (field === 'principal' || field === 'amortizationYears' || field === 'startYear') {
+              loan[field] = Number(event.target.value || 0);
+            } else {
+              loan[field] = event.target.value;
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+        loanList.appendChild(row);
+      });
+      ui.scenarioEditor.querySelector('#addLoan').addEventListener('click', () => {
+        scenario.loans.push({
+          id: crypto.randomUUID(),
+          direction: 'BV->Private',
+          principal: 100000,
+          interestRate: 0.03,
+          startYear: state.globals.startYear,
+          amortizationType: 'interestOnly',
+          amortizationYears: 0,
+          loanType: 'general'
+        });
+        saveProject();
+        renderLoanList(scenario);
+        runSimulation();
+      });
+    }
+
+    function renderDrawdownEditor(scenario) {
+      const container = ui.scenarioEditor.querySelector('#drawdownEditor');
+      if (scenario.drawdownMode === 'simple') {
+        container.innerHTML = `
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <label class="space-y-1">Annual drawdown €
+              <input id="simpleAmount" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.amount}" />
+            </label>
+            <label class="space-y-1">Auto-rebalance
+              <input id="simpleAuto" type="checkbox" class="border" ${scenario.drawdownSimple.autoRebalance ? 'checked' : ''} />
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-xs mt-2">
+            <label class="space-y-1">Private bank %
+              <input data-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.privateBank * 100}" />
+            </label>
+            <label class="space-y-1">Private other %
+              <input data-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.privateOther * 100}" />
+            </label>
+            <label class="space-y-1">BV dividend %
+              <input data-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.bvDividend * 100}" />
+            </label>
+            <label class="space-y-1">BV loan %
+              <input data-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.bvLoan * 100}" />
+            </label>
+          </div>
+        `;
+        container.querySelector('#simpleAmount').addEventListener('input', (event) => {
+          scenario.drawdownSimple.amount = Number(event.target.value || 0);
+          saveProject();
+          runSimulation();
+        });
+        container.querySelector('#simpleAuto').addEventListener('change', (event) => {
+          scenario.drawdownSimple.autoRebalance = event.target.checked;
+          saveProject();
+          runSimulation();
+        });
+        container.querySelectorAll('[data-split]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.split;
+            scenario.drawdownSimple.split[field] = Number(event.target.value || 0) / 100;
+            saveProject();
+            runSimulation();
+          });
+        });
+      } else {
+        const rows = [];
+        for (let i = 0; i < state.globals.horizonYears; i += 1) {
+          const year = state.globals.startYear + i;
+          const row = scenario.drawdownAdvanced[year] || { privateBank: 0, privateOther: 0, bvDividend: 0, bvLoan: 0 };
+          rows.push({ year, ...row });
+        }
+        container.innerHTML = `
+          <div class="text-xs text-slate-500">Specify exact amounts per source.</div>
+          <div class="space-y-2 max-h-64 overflow-y-auto">
+            ${rows.map((row) => `
+              <div class="grid grid-cols-5 gap-2 text-xs items-center">
+                <div class="font-semibold">${row.year}</div>
+                <input data-adv="privateBank" data-year="${row.year}" type="number" class="border rounded px-2 py-1" value="${row.privateBank}" />
+                <input data-adv="privateOther" data-year="${row.year}" type="number" class="border rounded px-2 py-1" value="${row.privateOther}" />
+                <input data-adv="bvDividend" data-year="${row.year}" type="number" class="border rounded px-2 py-1" value="${row.bvDividend}" />
+                <input data-adv="bvLoan" data-year="${row.year}" type="number" class="border rounded px-2 py-1" value="${row.bvLoan}" />
+              </div>
+            `).join('')}
+          </div>
+        `;
+        container.querySelectorAll('[data-adv]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const year = event.target.dataset.year;
+            const field = event.target.dataset.adv;
+            scenario.drawdownAdvanced[year] = scenario.drawdownAdvanced[year] || { privateBank: 0, privateOther: 0, bvDividend: 0, bvLoan: 0 };
+            scenario.drawdownAdvanced[year][field] = Number(event.target.value || 0);
+            saveProject();
+            runSimulation();
+          });
+        });
+      }
+    }
+
+    function renderTaxYearOptions() {
+      const years = Object.keys(state.taxParamsByYear).map(Number).sort((a, b) => a - b);
+      ui.taxYearSelect.innerHTML = years.map((year) => `<option value="${year}">${year}</option>`).join('');
+      if (!ui.taxYearSelect.value && years.length) {
+        ui.taxYearSelect.value = years[0];
+      }
+    }
+
+    function renderTaxParamsEditor() {
+      renderTaxYearOptions();
+      ui.taxYearSelect.addEventListener('change', () => renderTaxParamsEditor());
+      document.getElementById('addTaxYear').addEventListener('click', () => {
+        const year = prompt('Add year', String(state.globals.startYear));
+        if (!year) return;
+        const yearNum = Number(year);
+        if (!Number.isFinite(yearNum)) return;
+        if (!state.taxParamsByYear[yearNum]) {
+          state.taxParamsByYear[yearNum] = deepClone(defaultTaxParamsByYear[2026]);
+        }
+        saveProject();
+        renderTaxParamsEditor();
+        runSimulation();
+      });
+      document.getElementById('copyTaxYear').addEventListener('click', () => {
+        const sourceYear = Number(ui.taxYearSelect.value);
+        const sourceParams = state.taxParamsByYear[sourceYear];
+        const years = Object.keys(state.taxParamsByYear).map(Number);
+        const maxYear = Math.max(...years, sourceYear);
+        for (let year = sourceYear + 1; year <= maxYear + 5; year += 1) {
+          state.taxParamsByYear[year] = deepClone(sourceParams);
+        }
+        saveProject();
+        renderTaxParamsEditor();
+        runSimulation();
+      });
+      document.getElementById('resetTaxDefaults').addEventListener('click', () => {
+        if (!confirm('Reset tax params to defaults?')) return;
+        state.taxParamsByYear = structuredClone(defaultTaxParamsByYear);
+        saveProject();
+        renderTaxParamsEditor();
+        runSimulation();
+      });
+
+      const year = Number(ui.taxYearSelect.value);
+      const params = state.taxParamsByYear[year];
+      if (!params) return;
+
+      ui.taxParamsEditor.innerHTML = `
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <label class="space-y-1">Box 3 tax rate
+            <input data-tax="box3TaxRate" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.box3TaxRate}" />
+          </label>
+          <label class="space-y-1">Box 3 allowance per person
+            <input data-tax="box3AllowancePerPerson" type="number" class="border rounded px-2 py-1 w-full" value="${params.box3AllowancePerPerson}" />
+          </label>
+          <label class="space-y-1">Box 3 debt threshold per person
+            <input data-tax="box3DebtThresholdPerPerson" type="number" class="border rounded px-2 py-1 w-full" value="${params.box3DebtThresholdPerPerson}" />
+          </label>
+          <label class="space-y-1">Deemed return bank
+            <input data-tax="deemedReturnBank" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.deemedReturnBank}" />
+          </label>
+          <label class="space-y-1">Deemed return other
+            <input data-tax="deemedReturnOther" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.deemedReturnOther}" />
+          </label>
+          <label class="space-y-1">Deemed return debt
+            <input data-tax="deemedReturnDebt" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.deemedReturnDebt}" />
+          </label>
+          <label class="space-y-1">Dividend withholding rate
+            <input data-tax="dividendWithholdingRate" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.dividendWithholdingRate}" />
+          </label>
+          <label class="space-y-1">Box 2 low bracket threshold
+            <input data-tax="box2LowBracketThreshold" type="number" class="border rounded px-2 py-1 w-full" value="${params.box2LowBracketThreshold}" />
+          </label>
+          <label class="space-y-1">Excess borrowing base threshold
+            <input data-tax="excessBorrowingBaseThreshold" type="number" class="border rounded px-2 py-1 w-full" value="${params.excessBorrowingBaseThreshold}" />
+          </label>
+          <label class="space-y-1">DGA salary default
+            <input data-tax="dgaSalaryDefault" type="number" class="border rounded px-2 py-1 w-full" value="${params.dgaSalaryDefault}" />
+          </label>
+          <label class="space-y-1">Box 1 effective rate
+            <input data-tax="box1EffectiveRate" type="number" step="0.001" class="border rounded px-2 py-1 w-full" value="${params.box1EffectiveRate}" />
+          </label>
+        </div>
+        <div class="space-y-1 text-xs">
+          <label class="flex items-center gap-2">
+            <input data-tax="excludePrincipalResidenceLoansIfQualified" type="checkbox" class="border" ${params.excludePrincipalResidenceLoansIfQualified ? 'checked' : ''} /> Exclude principal residence loans
+          </label>
+          <label class="flex items-center gap-2">
+            <input data-tax="allowThresholdCarryMechanism" type="checkbox" class="border" ${params.allowThresholdCarryMechanism ? 'checked' : ''} /> Allow threshold carry mechanism
+          </label>
+          <label class="flex items-center gap-2">
+            <input data-tax="includePartnerDebtInDebtSum" type="checkbox" class="border" ${params.includePartnerDebtInDebtSum ? 'checked' : ''} /> Include partner debt
+          </label>
+          <label class="flex items-center gap-2">
+            <input data-tax="connectedPersonsDebtIncluded" type="checkbox" class="border" ${params.connectedPersonsDebtIncluded ? 'checked' : ''} /> Include connected persons debt
+          </label>
+        </div>
+        <div class="text-xs text-slate-500">CIT brackets and Box 2 brackets can be edited in the JSON export/import for now.</div>
+      `;
+
+      ui.taxParamsEditor.querySelectorAll('[data-tax]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          const field = event.target.dataset.tax;
+          if (input.type === 'checkbox') {
+            params[field] = input.checked;
+          } else {
+            params[field] = Number(event.target.value || 0);
+          }
+          saveProject();
+          runSimulation();
+        });
+      });
+    }
+
+    function renderVault() {
+      ui.vaultList.innerHTML = '';
+      state.vault.forEach((item) => {
+        const card = document.createElement('div');
+        card.className = 'border rounded p-2 text-xs space-y-1';
+        card.innerHTML = `
+          <div class="font-semibold">${item.name}</div>
+          <div class="text-slate-500">${item.snapshot ? 'Snapshot' : 'Scenario'} • ${new Date(item.timestamp).toLocaleString()}</div>
+          <div class="flex flex-wrap gap-2">
+            <button data-action="load" class="border rounded px-2 py-1">Load</button>
+            <button data-action="overlay" class="border rounded px-2 py-1">Overlay</button>
+            <button data-action="delete" class="border rounded px-2 py-1 text-rose-600">Delete</button>
+          </div>
+        `;
+        card.querySelector('[data-action="load"]').addEventListener('click', () => {
+          const clone = deepClone(item.scenario);
+          clone.id = crypto.randomUUID();
+          state.scenarios.push(clone);
+          saveProject();
+          renderScenarioList();
+          runSimulation();
+        });
+        card.querySelector('[data-action="overlay"]').addEventListener('click', () => {
+          item.overlay = !item.overlay;
+          saveVault();
+          runSimulation();
+        });
+        card.querySelector('[data-action="delete"]').addEventListener('click', () => {
+          if (!confirm('Delete vault item?')) return;
+          state.vault = state.vault.filter((vaultItem) => vaultItem.id !== item.id);
+          saveVault();
+          renderVault();
+          runSimulation();
+        });
+        ui.vaultList.appendChild(card);
+      });
+    }
+
+    function bracketedTax(amount, threshold, brackets) {
+      let remaining = amount;
+      let tax = 0;
+      for (const bracket of brackets) {
+        const upper = bracket.upTo === Infinity ? Infinity : bracket.upTo;
+        const width = Math.max(0, Math.min(remaining, upper - (threshold || 0)));
+        if (width <= 0) {
+          if (upper === Infinity) break;
+          continue;
+        }
+        tax += width * bracket.rate;
+        remaining -= width;
+        threshold = upper;
+        if (remaining <= 0) break;
+      }
+      if (remaining > 0 && brackets.length) {
+        tax += remaining * brackets[brackets.length - 1].rate;
+      }
+      return tax;
+    }
+
+    function computeBox3(year, state, params, numTaxpayers) {
+      const allowanceTotal = numTaxpayers * params.box3AllowancePerPerson;
+      const debtThresholdTotal = numTaxpayers * params.box3DebtThresholdPerPerson;
+      const deductibleDebt = Math.max(0, state.privateDebt - debtThresholdTotal);
+      const capitalBase = (state.privateBank + state.privateOther) - deductibleDebt;
+      const taxableBase = Math.max(0, capitalBase - allowanceTotal);
+      const share = capitalBase <= 0 ? 0 : taxableBase / capitalBase;
+      const deemedReturn = (state.privateBank * params.deemedReturnBank)
+        + (state.privateOther * params.deemedReturnOther)
+        - (deductibleDebt * params.deemedReturnDebt);
+      const box3Income = deemedReturn * share;
+      const box3Tax = box3Income * params.box3TaxRate;
+
+      return {
+        allowanceTotal,
+        debtThresholdTotal,
+        deductibleDebt,
+        capitalBase,
+        taxableBase,
+        share,
+        deemedReturn,
+        box3Income,
+        box3Tax
+      };
+    }
+
+    function computeCIT(year, bvState, params) {
+      const bvPreTaxProfit = bvState.returns + bvState.interestReceived - bvState.interestPaid - (bvState.optionalCosts || 0);
+      const taxable = Math.max(0, bvPreTaxProfit);
+      let remaining = taxable;
+      let lastUpTo = 0;
+      let cit = 0;
+      for (const bracket of params.citBrackets) {
+        const upper = bracket.upTo === Infinity ? Infinity : bracket.upTo;
+        const taxableInBracket = Math.min(remaining, upper - lastUpTo);
+        if (taxableInBracket > 0) {
+          cit += taxableInBracket * bracket.rate;
+          remaining -= taxableInBracket;
+        }
+        lastUpTo = upper;
+        if (remaining <= 0) break;
+      }
+      const bvAfterTaxProfit = bvPreTaxProfit - cit;
+      return { bvPreTaxProfit, cit, bvAfterTaxProfit };
+    }
+
+    function computeDividendTaxes(year, grossDividend, params, numTaxpayers, scenarioToggle) {
+      const withholdingTax = grossDividend * params.dividendWithholdingRate;
+      const netDividendToPrivate = grossDividend - withholdingTax;
+      let threshold = params.box2LowBracketThreshold;
+      if (numTaxpayers === 2 && scenarioToggle) {
+        threshold *= 2;
+      }
+      const box2TaxOnDividendsGross = bracketedTax(grossDividend, threshold, params.box2Brackets);
+      const box2WithholdingCredit = Math.min(withholdingTax, box2TaxOnDividendsGross);
+      const box2TaxOnDividendsDue = Math.max(0, box2TaxOnDividendsGross - box2WithholdingCredit);
+      return {
+        withholdingTax,
+        netDividendToPrivate,
+        box2TaxOnDividendsGross,
+        box2WithholdingCredit,
+        box2TaxOnDividendsDue,
+        thresholdUsed: threshold
+      };
+    }
+
+    function computeExcessBorrowing(year, scenario, loanStates, params, box2ThresholdUsed, box2Brackets, thresholdExtraState) {
+      const countedLoans = loanStates.filter((loan) => loan.direction === 'BV->Private' && loan.startYear <= year);
+      let debtSum = 0;
+      const breakdown = [];
+      for (const loan of countedLoans) {
+        if (loan.loanType === 'principalResidence' && params.excludePrincipalResidenceLoansIfQualified) {
+          breakdown.push({ id: loan.id, amount: 0, note: 'Excluded principal residence' });
+          continue;
+        }
+        debtSum += loan.balance;
+        breakdown.push({ id: loan.id, amount: loan.balance, note: loan.loanType });
+      }
+      if (params.includePartnerDebtInDebtSum) {
+        debtSum += scenario.partnerDebtToBV || 0;
+      }
+      if (params.connectedPersonsDebtIncluded) {
+        debtSum += scenario.connectedPersonsDebtToBV || 0;
+      }
+
+      const currentThreshold = params.excessBorrowingBaseThreshold + thresholdExtraState.value;
+      let excessAmount = 0;
+      let box2TaxOnExcessBorrowing = 0;
+      if (debtSum > currentThreshold) {
+        excessAmount = debtSum - currentThreshold;
+        box2TaxOnExcessBorrowing = bracketedTax(excessAmount, box2ThresholdUsed, box2Brackets);
+        if (params.allowThresholdCarryMechanism) {
+          thresholdExtraState.value += excessAmount;
+        }
+      }
+
+      return {
+        debtSum,
+        breakdown,
+        currentThreshold,
+        excessAmount,
+        box2TaxOnExcessBorrowing
+      };
+    }
+
+    function getTaxParamsForYear(year) {
+      const years = Object.keys(state.taxParamsByYear).map(Number).sort((a, b) => a - b);
+      let selectedYear = years[0];
+      for (const y of years) {
+        if (y <= year) selectedYear = y;
+      }
+      return state.taxParamsByYear[selectedYear];
+    }
+
+    function runSimulation() {
+      saveProject();
+      renderActiveScenarioTags();
+      const activeScenarios = state.scenarios.filter((scenario) => scenario.active);
+      const horizon = state.globals.horizonYears;
+      const years = Array.from({ length: horizon }, (_, i) => state.globals.startYear + i);
+      const results = activeScenarios.map((scenario) => simulateScenario(scenario, years));
+      renderKPIs(results, years);
+      renderChart(results, years);
+      renderYearTable(results, years);
+    }
+
+    function simulateScenario(scenario, years) {
+      const numTaxpayers = state.globals.numTaxpayers;
+      let privateBank = scenario.balances.privateBank;
+      let privateOther = scenario.balances.privateOther;
+      let privateDebt = scenario.balances.privateDebt;
+      let bvCash = scenario.balances.bvCash;
+      let bvInvestments = scenario.balances.bvInvestments;
+      const loanStates = scenario.loans.map((loan) => ({
+        ...deepClone(loan),
+        balance: loan.principal
+      }));
+      const thresholdExtraState = { value: 0 };
+
+      const perYear = [];
+
+      years.forEach((year) => {
+        const params = getTaxParamsForYear(year);
+        const startBalances = { privateBank, privateOther, privateDebt, bvCash, bvInvestments };
+
+        const returns = {
+          privateBank: privateBank * scenario.returns.privateBank,
+          privateOther: privateOther * scenario.returns.privateOther,
+          bvCash: bvCash * scenario.returns.bvCash,
+          bvInvestments: bvInvestments * scenario.returns.bvInvestments
+        };
+
+        privateBank += returns.privateBank;
+        privateOther += returns.privateOther;
+        bvCash += returns.bvCash;
+        bvInvestments += returns.bvInvestments;
+
+        const loanFlow = { interestReceived: 0, interestPaid: 0, repayments: 0, newLoans: 0 };
+        loanStates.forEach((loan) => {
+          if (year < loan.startYear) return;
+          const interest = loan.balance * loan.interestRate;
+          if (loan.direction === 'BV->Private') {
+            loanFlow.interestReceived += interest;
+            privateBank -= interest;
+            bvCash += interest;
+          } else {
+            loanFlow.interestPaid += interest;
+            bvCash -= interest;
+            privateBank += interest;
+          }
+          if (loan.amortizationType === 'linear' && loan.amortizationYears > 0) {
+            const yearly = loan.principal / loan.amortizationYears;
+            const repayment = Math.min(yearly, loan.balance);
+            loan.balance -= repayment;
+            loanFlow.repayments += repayment;
+            if (loan.direction === 'BV->Private') {
+              privateBank -= repayment;
+              bvCash += repayment;
+            } else {
+              bvCash -= repayment;
+              privateBank += repayment;
+            }
+          }
+        });
+
+        const drawdown = getDrawdownForYear(scenario, year);
+        const warnings = [];
+        const drawdownResult = applyDrawdown(drawdown, {
+          privateBank,
+          privateOther,
+          bvCash,
+          privateDebt
+        }, scenario.drawdownMode === 'simple' ? scenario.drawdownSimple.autoRebalance : false, warnings);
+        privateBank = drawdownResult.balances.privateBank;
+        privateOther = drawdownResult.balances.privateOther;
+        bvCash = drawdownResult.balances.bvCash;
+        privateDebt = drawdownResult.balances.privateDebt;
+
+        const dividendTaxes = computeDividendTaxes(year, drawdownResult.actual.bvDividend, params, numTaxpayers, scenario.box2UseDoubleLowBracket);
+        bvCash -= drawdownResult.actual.bvDividend;
+        privateBank += dividendTaxes.netDividendToPrivate;
+
+        const box3 = computeBox3(year, {
+          privateBank,
+          privateOther,
+          privateDebt
+        }, params, numTaxpayers);
+
+        const cit = computeCIT(year, {
+          returns: returns.bvCash + returns.bvInvestments,
+          interestReceived: loanFlow.interestReceived,
+          interestPaid: loanFlow.interestPaid
+        }, params);
+
+        const excess = computeExcessBorrowing(
+          year,
+          scenario,
+          loanStates,
+          params,
+          dividendTaxes.thresholdUsed,
+          params.box2Brackets,
+          thresholdExtraState
+        );
+
+        if (params.allowThresholdCarryMechanism) {
+          thresholdExtraState.value = Math.max(0, thresholdExtraState.value - loanFlow.repayments);
+        }
+
+        let box1Tax = 0;
+        let box1Income = 0;
+        if (scenario.dgaSalaryEnabled) {
+          box1Income = scenario.dgaSalaryAmount || params.dgaSalaryDefault;
+          if (scenario.box1UseBrackets) {
+            box1Tax = bracketedTax(box1Income, 0, params.box1Brackets);
+          } else {
+            box1Tax = box1Income * params.box1EffectiveRate;
+          }
+          if (scenario.addNetIncomeToPrivateBank) {
+            privateBank += (box1Income - box1Tax);
+          }
+        }
+
+        const totalTax = box3.box3Tax + cit.cit + dividendTaxes.withholdingTax + dividendTaxes.box2TaxOnDividendsDue + excess.box2TaxOnExcessBorrowing + box1Tax;
+        const endBalances = { privateBank, privateOther, privateDebt, bvCash, bvInvestments };
+
+        perYear.push({
+          year,
+          startBalances,
+          returns,
+          loanFlow,
+          drawdown: drawdownResult,
+          box3,
+          cit,
+          dividendTaxes,
+          excessBorrowing: excess,
+          box1Tax,
+          box1Income,
+          totalTax,
+          endBalances,
+          warnings
+        });
+      });
+
+      return { scenario, years, perYear };
+    }
+
+    function getDrawdownForYear(scenario, year) {
+      if (scenario.drawdownMode === 'advanced') {
+        return scenario.drawdownAdvanced[year] || { privateBank: 0, privateOther: 0, bvDividend: 0, bvLoan: 0 };
+      }
+      const amount = scenario.drawdownSimple.amount;
+      return {
+        privateBank: amount * scenario.drawdownSimple.split.privateBank,
+        privateOther: amount * scenario.drawdownSimple.split.privateOther,
+        bvDividend: amount * scenario.drawdownSimple.split.bvDividend,
+        bvLoan: amount * scenario.drawdownSimple.split.bvLoan
+      };
+    }
+
+    function applyDrawdown(drawdown, balances, autoRebalance, warnings) {
+      const desired = { ...drawdown };
+      const actual = { ...drawdown };
+
+      const sources = [
+        { key: 'privateBank', label: 'Private bank' },
+        { key: 'privateOther', label: 'Private other' },
+        { key: 'bvDividend', label: 'BV dividend', bv: true },
+        { key: 'bvLoan', label: 'BV loan', bv: true }
+      ];
+
+      for (const source of sources) {
+        const available = source.bv ? balances.bvCash : balances[source.key];
+        if (actual[source.key] > available) {
+          if (autoRebalance) {
+            actual[source.key] = available;
+          } else {
+            warnings.push(`${source.label} insufficient`);
+          }
+        }
+      }
+
+      const totalRequested = sources.reduce((sum, source) => sum + desired[source.key], 0);
+      const totalActual = sources.reduce((sum, source) => sum + actual[source.key], 0);
+      if (autoRebalance && totalActual < totalRequested) {
+        const gap = totalRequested - totalActual;
+        for (const source of sources) {
+          const available = source.bv ? balances.bvCash : balances[source.key];
+          const remaining = available - actual[source.key];
+          if (remaining <= 0) continue;
+          const add = Math.min(gap, remaining);
+          actual[source.key] += add;
+          if (actual[source.key] >= desired[source.key]) continue;
+          if (gap - add <= 0) break;
+        }
+      }
+
+      balances.privateBank -= actual.privateBank;
+      balances.privateOther -= actual.privateOther;
+      balances.bvCash -= actual.bvDividend;
+      balances.bvCash -= actual.bvLoan;
+      balances.privateBank += actual.bvLoan;
+      balances.privateDebt += actual.bvLoan;
+
+      return { desired, actual, balances };
+    }
+
+    function renderKPIs(results, years) {
+      ui.kpiCards.innerHTML = '';
+      results.forEach((result) => {
+        const totals = result.perYear.reduce((acc, year) => {
+          acc.totalTax += year.totalTax;
+          acc.box3 += year.box3.box3Tax;
+          acc.cit += year.cit.cit;
+          acc.withholding += year.dividendTaxes.withholdingTax;
+          acc.box2Div += year.dividendTaxes.box2TaxOnDividendsDue;
+          acc.box2Excess += year.excessBorrowing.box2TaxOnExcessBorrowing;
+          acc.box1 += year.box1Tax;
+          return acc;
+        }, { totalTax: 0, box3: 0, cit: 0, withholding: 0, box2Div: 0, box2Excess: 0, box1: 0 });
+        const last = result.perYear[result.perYear.length - 1];
+        const endWealth = last.endBalances.privateBank + last.endBalances.privateOther + last.endBalances.bvCash + last.endBalances.bvInvestments - last.endBalances.privateDebt;
+        const card = document.createElement('div');
+        card.className = 'bg-white border rounded p-3 space-y-1';
+        card.innerHTML = `
+          <div class="font-semibold">${result.scenario.name}</div>
+          <div class="text-xs">Total taxes: <span class="font-semibold">${formatCurrency(totals.totalTax)}</span></div>
+          <div class="text-xs">Avg annual taxes: <span class="font-semibold">${formatCurrency(totals.totalTax / years.length)}</span></div>
+          <div class="text-xs">End wealth total: <span class="font-semibold">${formatCurrency(endWealth)}</span></div>
+          <div class="text-[11px] text-slate-500">Box 3 ${formatCurrency(totals.box3)} • CIT ${formatCurrency(totals.cit)} • Withholding ${formatCurrency(totals.withholding)} • Box 2 (div) ${formatCurrency(totals.box2Div)} • Box 2 (excess) ${formatCurrency(totals.box2Excess)} • Box 1 ${formatCurrency(totals.box1)}</div>
+        `;
+        ui.kpiCards.appendChild(card);
+      });
+    }
+
+    let chartInstance = null;
+    function renderChart(results, years) {
+      const ctx = document.getElementById('taxChart');
+      const datasets = [];
+      results.forEach((result, index) => {
+        const color = `hsl(${(index * 80) % 360}, 70%, 45%)`;
+        datasets.push({
+          label: `${result.scenario.name} (Wealth)`,
+          data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
+          yAxisID: 'y',
+          borderColor: color,
+          backgroundColor: color,
+          tension: 0.2
+        });
+        datasets.push({
+          label: `${result.scenario.name} (Tax)`,
+          data: result.perYear.map((year) => year.totalTax),
+          yAxisID: 'y1',
+          borderColor: color,
+          backgroundColor: color,
+          borderDash: [4, 4],
+          tension: 0.2
+        });
+      });
+
+      state.vault.filter((item) => item.overlay).forEach((item, idx) => {
+        const result = simulateScenario(item.scenario, years);
+        const color = `hsl(${(idx * 90 + 40) % 360}, 60%, 55%)`;
+        datasets.push({
+          label: `${item.name} (Vault Wealth)`,
+          data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
+          yAxisID: 'y',
+          borderColor: color,
+          borderDash: [8, 4],
+          tension: 0.2
+        });
+        datasets.push({
+          label: `${item.name} (Vault Tax)`,
+          data: result.perYear.map((year) => year.totalTax),
+          yAxisID: 'y1',
+          borderColor: color,
+          borderDash: [2, 4],
+          tension: 0.2
+        });
+      });
+
+      if (chartInstance) chartInstance.destroy();
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: years,
+          datasets
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            y: {
+              position: 'left',
+              title: { display: true, text: 'Wealth (€)' }
+            },
+            y1: {
+              position: 'right',
+              title: { display: true, text: 'Taxes (€)' },
+              grid: { drawOnChartArea: false }
+            }
+          }
+        }
+      });
+    }
+
+    function renderYearTable(results, years) {
+      const showBreakdown = ui.toggleBreakdown.checked;
+      const headers = ['Year'];
+      results.forEach((result) => {
+        headers.push(`${result.scenario.name} Total Tax`);
+        if (showBreakdown) {
+          headers.push(`${result.scenario.name} Box 3`);
+          headers.push(`${result.scenario.name} CIT`);
+          headers.push(`${result.scenario.name} Withholding`);
+          headers.push(`${result.scenario.name} Box 2 Div`);
+          headers.push(`${result.scenario.name} Box 2 Excess`);
+          headers.push(`${result.scenario.name} Box 1`);
+        }
+        headers.push(`${result.scenario.name} End Private`);
+        headers.push(`${result.scenario.name} End BV`);
+        headers.push(`${result.scenario.name} End Total`);
+      });
+
+      const headerRow = `<tr class="bg-slate-100">${headers.map((header) => `<th class="p-2 border text-left">${header}</th>`).join('')}</tr>`;
+      const rows = years.map((year, idx) => {
+        const cells = [`<td class="p-2 border font-semibold">${year}</td>`];
+        results.forEach((result) => {
+          const data = result.perYear[idx];
+          const endPrivate = data.endBalances.privateBank + data.endBalances.privateOther - data.endBalances.privateDebt;
+          const endBv = data.endBalances.bvCash + data.endBalances.bvInvestments;
+          const endTotal = endPrivate + endBv;
+          cells.push(`<td class="p-2 border">${formatCurrency(data.totalTax)}</td>`);
+          if (showBreakdown) {
+            cells.push(`<td class="p-2 border">${formatCurrency(data.box3.box3Tax)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.cit.cit)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.withholdingTax)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.box2TaxOnDividendsDue)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.excessBorrowing.box2TaxOnExcessBorrowing)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.box1Tax)}</td>`);
+          }
+          cells.push(`<td class="p-2 border">${formatCurrency(endPrivate)}</td>`);
+          cells.push(`<td class="p-2 border">${formatCurrency(endBv)}</td>`);
+          cells.push(`<td class="p-2 border">${formatCurrency(endTotal)}</td>`);
+        });
+        const detailRows = results.map((result) => {
+          const detail = result.perYear[idx];
+          return `
+            <div class="border rounded p-2 mb-2">
+              <div class="font-semibold text-xs">${result.scenario.name} — ${year}</div>
+              <div class="grid grid-cols-2 gap-2 text-xs mt-2">
+                <div>
+                  <div class="font-semibold">Starting balances</div>
+                  <div>Private bank: ${formatCurrency(detail.startBalances.privateBank)}</div>
+                  <div>Private other: ${formatCurrency(detail.startBalances.privateOther)}</div>
+                  <div>Deductible debts: ${formatCurrency(detail.startBalances.privateDebt)}</div>
+                  <div>BV cash: ${formatCurrency(detail.startBalances.bvCash)}</div>
+                  <div>BV investments: ${formatCurrency(detail.startBalances.bvInvestments)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Returns applied</div>
+                  <div>Private bank: ${formatCurrency(detail.returns.privateBank)}</div>
+                  <div>Private other: ${formatCurrency(detail.returns.privateOther)}</div>
+                  <div>BV cash: ${formatCurrency(detail.returns.bvCash)}</div>
+                  <div>BV investments: ${formatCurrency(detail.returns.bvInvestments)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Loan schedule</div>
+                  <div>Interest received: ${formatCurrency(detail.loanFlow.interestReceived)}</div>
+                  <div>Interest paid: ${formatCurrency(detail.loanFlow.interestPaid)}</div>
+                  <div>Repayments: ${formatCurrency(detail.loanFlow.repayments)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Drawdown</div>
+                  <div>Requested: ${formatCurrency(Object.values(detail.drawdown.desired).reduce((a, b) => a + b, 0))}</div>
+                  <div>Actual: ${formatCurrency(Object.values(detail.drawdown.actual).reduce((a, b) => a + b, 0))}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Box 3</div>
+                  <div>Allowance total: ${formatCurrency(detail.box3.allowanceTotal)}</div>
+                  <div>Debt threshold total: ${formatCurrency(detail.box3.debtThresholdTotal)}</div>
+                  <div>Deductible debt: ${formatCurrency(detail.box3.deductibleDebt)}</div>
+                  <div>Capital base: ${formatCurrency(detail.box3.capitalBase)}</div>
+                  <div>Taxable base: ${formatCurrency(detail.box3.taxableBase)}</div>
+                  <div>Share: ${formatPercent(detail.box3.share)}</div>
+                  <div>Deemed return: ${formatCurrency(detail.box3.deemedReturn)}</div>
+                  <div>Box 3 income: ${formatCurrency(detail.box3.box3Income)}</div>
+                  <div>Box 3 tax: ${formatCurrency(detail.box3.box3Tax)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">BV profit & CIT</div>
+                  <div>Pre-tax profit: ${formatCurrency(detail.cit.bvPreTaxProfit)}</div>
+                  <div>CIT: ${formatCurrency(detail.cit.cit)}</div>
+                  <div>After-tax profit: ${formatCurrency(detail.cit.bvAfterTaxProfit)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Dividends</div>
+                  <div>Withholding tax: ${formatCurrency(detail.dividendTaxes.withholdingTax)}</div>
+                  <div>Box 2 gross: ${formatCurrency(detail.dividendTaxes.box2TaxOnDividendsGross)}</div>
+                  <div>Withholding credit: ${formatCurrency(detail.dividendTaxes.box2WithholdingCredit)}</div>
+                  <div>Box 2 due: ${formatCurrency(detail.dividendTaxes.box2TaxOnDividendsDue)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Excessief lenen</div>
+                  <div>Debt sum: ${formatCurrency(detail.excessBorrowing.debtSum)}</div>
+                  <div>Threshold: ${formatCurrency(detail.excessBorrowing.currentThreshold)}</div>
+                  <div>Excess amount: ${formatCurrency(detail.excessBorrowing.excessAmount)}</div>
+                  <div>Box 2 on excess: ${formatCurrency(detail.excessBorrowing.box2TaxOnExcessBorrowing)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">Box 1</div>
+                  <div>Income: ${formatCurrency(detail.box1Income)}</div>
+                  <div>Tax: ${formatCurrency(detail.box1Tax)}</div>
+                </div>
+                <div>
+                  <div class="font-semibold">End balances</div>
+                  <div>Private bank: ${formatCurrency(detail.endBalances.privateBank)}</div>
+                  <div>Private other: ${formatCurrency(detail.endBalances.privateOther)}</div>
+                  <div>Deductible debts: ${formatCurrency(detail.endBalances.privateDebt)}</div>
+                  <div>BV cash: ${formatCurrency(detail.endBalances.bvCash)}</div>
+                  <div>BV investments: ${formatCurrency(detail.endBalances.bvInvestments)}</div>
+                </div>
+              </div>
+              ${detail.warnings.length ? `<div class="text-rose-600 text-xs mt-2">Warnings: ${detail.warnings.join(', ')}</div>` : ''}
+            </div>
+          `;
+        }).join('');
+        return `
+          <tr class="bg-white">
+            ${cells.join('')}
+          </tr>
+          <tr>
+            <td colspan="${headers.length}" class="p-2 border bg-slate-50">
+              <details>
+                <summary class="cursor-pointer text-xs font-semibold">Drilldown details</summary>
+                <div class="mt-2">${detailRows}</div>
+              </details>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      ui.yearTable.innerHTML = `<thead>${headerRow}</thead><tbody>${rows}</tbody>`;
+    }
+
+    function openModal(title, text, onConfirm, showFile = false) {
+      const modal = document.getElementById('modal');
+      document.getElementById('modalTitle').textContent = title;
+      const textarea = document.getElementById('modalTextarea');
+      textarea.value = text;
+      const fileInput = document.getElementById('modalFile');
+      fileInput.classList.toggle('hidden', !showFile);
+      modal.classList.remove('hidden');
+      const confirmBtn = document.getElementById('modalConfirm');
+      const cancelBtn = document.getElementById('modalCancel');
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+        cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+        fileInput.value = '';
+      };
+      document.getElementById('modalConfirm').addEventListener('click', () => {
+        const value = textarea.value;
+        onConfirm(value);
+        cleanup();
+      });
+      document.getElementById('modalCancel').addEventListener('click', () => cleanup());
+      if (showFile) {
+        fileInput.addEventListener('change', () => {
+          const file = fileInput.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            textarea.value = reader.result;
+          };
+          reader.readAsText(file);
+        });
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
