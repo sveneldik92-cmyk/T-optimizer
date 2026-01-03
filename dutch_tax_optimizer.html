@@ -76,12 +76,16 @@
                     <option value="2">2 (fiscal partners)</option>
                   </select>
                 </label>
+                <label class="space-y-1 flex items-center gap-2">Pay taxes from cash
+                  <input id="payTaxesFromCash" type="checkbox" class="border" />
+                </label>
               </div>
               <div class="flex flex-wrap gap-2 text-xs">
                 <button id="exportProject" class="px-2 py-1 border rounded">Export project</button>
                 <button id="importProject" class="px-2 py-1 border rounded lite-hide">Import project</button>
                 <button id="exportActionsCsv" class="px-2 py-1 border rounded lite-hide">Download Actions CSV</button>
                 <button id="resetProject" class="px-2 py-1 border rounded text-rose-600 lite-hide">Reset</button>
+                <button id="runAuditTests" class="px-2 py-1 border rounded">Test / Audit</button>
                 <button id="exportVault" class="px-2 py-1 border rounded lite-hide">Export vault</button>
                 <button id="importVault" class="px-2 py-1 border rounded lite-hide">Import vault</button>
                 <button id="showDisclaimer" class="px-2 py-1 border rounded lite-hide">View disclaimer</button>
@@ -169,6 +173,33 @@
     const STORAGE_PROJECT = 'dto_project_v1';
     const STORAGE_VAULT = 'dto_vault_v1';
     const SCHEMA_VERSION = 2;
+    const LABELS = {
+      privateBank: 'Private – cash',
+      privateOther: 'Private – investments',
+      privateDebtBV: 'Private debt – to BV',
+      privateDebtOther: 'Private debt – other',
+      bvCash: 'BV – cash',
+      bvInvestments: 'BV – investments',
+      spendingNeedGross: 'Spending need (gross)',
+      bvDividendGross: 'Dividend (gross)',
+      netCashToPrivate: 'Dividend net cash to private',
+      box3Tax: 'Box 3 tax',
+      cit: 'CIT (VPB)',
+      box2DividendDue: 'Box 2 due (dividends)',
+      box2Excess: 'Box 2 due (excess borrowing)',
+      withholdingTax: 'Dividend withholding',
+      debtSum: 'Debt counted (excess borrowing)',
+      headroom: 'Headroom to threshold',
+      currentThreshold: 'Excess borrowing threshold'
+    };
+    const defaultGlobals = {
+      startYear: 2026,
+      horizonYears: 30,
+      inflation: 0.02,
+      numTaxpayers: 2,
+      chartMode: 'wealth',
+      payTaxesFromCash: true
+    };
 
     const defaultTaxParamsByYear = {
       2026: {
@@ -413,13 +444,7 @@
     }
 
     const state = {
-      globals: {
-        startYear: 2026,
-        horizonYears: 30,
-        inflation: 0.02,
-        numTaxpayers: 2,
-        chartMode: 'wealth'
-      },
+      globals: { ...defaultGlobals },
       scenarios: [],
       taxParamsByYear: structuredClone(defaultTaxParamsByYear),
       vault: []
@@ -452,8 +477,16 @@
       return percentFormat.format(value || 0);
     }
 
+    function labelFor(key, fallback) {
+      return LABELS[key] || fallback || key;
+    }
+
     function deepClone(obj) {
       return JSON.parse(JSON.stringify(obj));
+    }
+
+    function totalWealth(balances) {
+      return balances.privateBank + balances.privateOther + balances.bvCash + balances.bvInvestments - balances.privateDebt;
     }
 
     function applyLiteModeUI() {
@@ -492,7 +525,7 @@
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          state.globals = parsed.globals || state.globals;
+          state.globals = { ...defaultGlobals, ...(parsed.globals || {}) };
           const scenarios = parsed.scenarios || [];
           state.scenarios = scenarios.map((scenario) => normalizeScenario(scenario));
           state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
@@ -571,6 +604,7 @@
       document.getElementById('horizonYears').value = state.globals.horizonYears;
       document.getElementById('inflation').value = state.globals.inflation * 100;
       document.getElementById('numTaxpayers').value = state.globals.numTaxpayers;
+      document.getElementById('payTaxesFromCash').checked = state.globals.payTaxesFromCash;
       const chartModeWealth = document.getElementById('chartModeWealth');
       const chartModeDebt = document.getElementById('chartModeDebt');
       if (chartModeWealth && chartModeDebt) {
@@ -598,6 +632,11 @@
       });
       document.getElementById('numTaxpayers').addEventListener('change', (event) => {
         state.globals.numTaxpayers = Number(event.target.value);
+        saveProject();
+        runSimulation();
+      });
+      document.getElementById('payTaxesFromCash').addEventListener('change', (event) => {
+        state.globals.payTaxesFromCash = event.target.checked;
         saveProject();
         runSimulation();
       });
@@ -657,12 +696,16 @@
           navigator.clipboard.writeText(text);
         });
       });
+      const auditButton = document.getElementById('runAuditTests');
+      if (auditButton) {
+        auditButton.addEventListener('click', () => runAuditTests());
+      }
 
       document.getElementById('importProject').addEventListener('click', () => {
         openModal('Import Project JSON', '', (text) => {
           try {
             const parsed = JSON.parse(text);
-            state.globals = parsed.globals || state.globals;
+            state.globals = { ...defaultGlobals, ...(parsed.globals || {}) };
             state.scenarios = (parsed.scenarios || []).map((scenario) => normalizeScenario(scenario));
             state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
             enforceSingleScenario();
@@ -891,26 +934,26 @@
             <summary class="p-2 cursor-pointer font-semibold">Starting State</summary>
             <div class="p-2 space-y-2 text-xs">
               <div class="grid grid-cols-2 gap-2">
-                <label class="space-y-1">Private bank
+                <label class="space-y-1">${labelFor('privateBank', 'Private bank')}
                   <input data-balance="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
                 </label>
-                <label class="space-y-1">Private other
+                <label class="space-y-1">${labelFor('privateOther', 'Private other')}
                   <input data-balance="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
                 </label>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <label class="space-y-1">Private debt (BV loans)
+                <label class="space-y-1">${labelFor('privateDebtBV', 'Private debt (BV loans)')}
                   <input data-balance="privateDebtBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtBV}" />
                 </label>
-                <label class="space-y-1">Private debt (other)
+                <label class="space-y-1">${labelFor('privateDebtOther', 'Private debt (other)')}
                   <input data-balance="privateDebtOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtOther}" />
                 </label>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <label class="space-y-1">BV cash
+                <label class="space-y-1">${labelFor('bvCash', 'BV cash')}
                   <input data-balance="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
                 </label>
-                <label class="space-y-1">BV investments
+                <label class="space-y-1">${labelFor('bvInvestments', 'BV investments')}
                   <input data-balance="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
                 </label>
               </div>
@@ -921,10 +964,10 @@
             <summary class="p-2 cursor-pointer font-semibold text-xs">Return assumptions (% per year)</summary>
             <div class="p-2 space-y-2 text-xs">
               <div class="grid grid-cols-2 gap-2">
-                <label class="space-y-1">Private bank %
+                <label class="space-y-1">${labelFor('privateBank', 'Private bank')} %
                   <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
                 </label>
-                <label class="space-y-1">Private other %
+                <label class="space-y-1">${labelFor('privateOther', 'Private other')} %
                   <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
                 </label>
               </div>
@@ -947,26 +990,26 @@
                 <summary class="p-2 cursor-pointer font-semibold text-xs">Starting State</summary>
                 <div class="p-2 space-y-2 text-xs">
                 <div class="grid grid-cols-2 gap-2">
-                  <label class="space-y-1">Private bank
+                  <label class="space-y-1">${labelFor('privateBank', 'Private bank')}
                     <input data-balance="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
                   </label>
-                  <label class="space-y-1">Private other
+                  <label class="space-y-1">${labelFor('privateOther', 'Private other')}
                     <input data-balance="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
                   </label>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                  <label class="space-y-1">Private debt (BV loans)
+                  <label class="space-y-1">${labelFor('privateDebtBV', 'Private debt (BV loans)')}
                     <input data-balance="privateDebtBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtBV}" />
                   </label>
-                  <label class="space-y-1">Private debt (other)
+                  <label class="space-y-1">${labelFor('privateDebtOther', 'Private debt (other)')}
                     <input data-balance="privateDebtOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtOther}" />
                   </label>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                  <label class="space-y-1">BV cash
+                  <label class="space-y-1">${labelFor('bvCash', 'BV cash')}
                     <input data-balance="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
                   </label>
-                  <label class="space-y-1">BV investments
+                  <label class="space-y-1">${labelFor('bvInvestments', 'BV investments')}
                     <input data-balance="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
                   </label>
                 </div>
@@ -979,7 +1022,7 @@
                     <span class="text-slate-500">${Math.round(scenario.assetMix.equityShare * 100)}% equities</span>
                   </div>
                   <input data-mix="equityShare" type="range" min="0" max="100" value="${scenario.assetMix.equityShare * 100}" class="w-full" />
-                  <div class="text-[11px] text-slate-500">Mix impacts Private Other return only.</div>
+                  <div class="text-[11px] text-slate-500">Mix impacts ${labelFor('privateOther', 'Private other')} return only.</div>
                 </div>
                 </div>
               </details>
@@ -988,16 +1031,16 @@
                 <summary class="p-2 cursor-pointer font-semibold text-xs">Return assumptions (% per year)</summary>
                 <div class="p-2 space-y-2 text-xs">
                 <div class="grid grid-cols-2 gap-2">
-                  <label class="space-y-1">Private bank %
+                  <label class="space-y-1">${labelFor('privateBank', 'Private bank')} %
                     <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
                   </label>
-                  <label class="space-y-1">Private other (manual) %
+                  <label class="space-y-1">${labelFor('privateOther', 'Private other')} (manual) %
                     <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
                   </label>
-                  <label class="space-y-1">BV cash %
+                  <label class="space-y-1">${labelFor('bvCash', 'BV cash')} %
                     <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
                   </label>
-                  <label class="space-y-1">BV investments %
+                  <label class="space-y-1">${labelFor('bvInvestments', 'BV investments')} %
                     <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
                   </label>
                 </div>
@@ -1172,23 +1215,23 @@
         timeline.mode = 'policy';
         container.innerHTML = `
           <div class="grid grid-cols-2 gap-2">
-            <label class="space-y-1">Spending need gross €
+            <label class="space-y-1">${labelFor('spendingNeedGross', 'Spending need gross')} €
               <input data-policy="spendingNeedGross" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.spendingNeedGross}" />
             </label>
           </div>
           <div class="border rounded p-2 space-y-2">
             <div class="font-semibold text-xs">Drawdown source split (%)</div>
             <div class="grid grid-cols-2 gap-2">
-              <label class="space-y-1">Private bank
+              <label class="space-y-1">${labelFor('privateBank', 'Private bank')}
                 <input data-policy-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateBank * 100}" />
               </label>
-              <label class="space-y-1">Private other
+              <label class="space-y-1">${labelFor('privateOther', 'Private other')}
                 <input data-policy-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateOther * 100}" />
               </label>
-              <label class="space-y-1">BV dividend
+              <label class="space-y-1">${labelFor('bvDividendGross', 'BV dividend')}
                 <input data-policy-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvDividend * 100}" />
               </label>
-              <label class="space-y-1">BV loan
+              <label class="space-y-1">${labelFor('bvLoan', 'BV loan')}
                 <input data-policy-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvLoan * 100}" />
               </label>
             </div>
@@ -1220,7 +1263,7 @@
       if (timeline.mode === 'policy') {
         container.innerHTML = `
           <div class="grid grid-cols-2 gap-2">
-            <label class="space-y-1">Spending need gross €
+            <label class="space-y-1">${labelFor('spendingNeedGross', 'Spending need gross')} €
               <input data-policy="spendingNeedGross" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.spendingNeedGross}" />
             </label>
             <label class="space-y-1">Auto-rebalance sources
@@ -1230,16 +1273,16 @@
           <div class="border rounded p-2 space-y-2">
             <div class="font-semibold text-xs">Drawdown source split (%)</div>
             <div class="grid grid-cols-2 gap-2">
-              <label class="space-y-1">Private bank
+              <label class="space-y-1">${labelFor('privateBank', 'Private bank')}
                 <input data-policy-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateBank * 100}" />
               </label>
-              <label class="space-y-1">Private other
+              <label class="space-y-1">${labelFor('privateOther', 'Private other')}
                 <input data-policy-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateOther * 100}" />
               </label>
-              <label class="space-y-1">BV dividend
+              <label class="space-y-1">${labelFor('bvDividendGross', 'BV dividend')}
                 <input data-policy-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvDividend * 100}" />
               </label>
-              <label class="space-y-1">BV loan
+              <label class="space-y-1">${labelFor('bvLoan', 'BV loan')}
                 <input data-policy-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvLoan * 100}" />
               </label>
             </div>
@@ -1255,7 +1298,7 @@
             <label class="space-y-1">Smooth dividend target gross €
               <input data-policy="smoothDividendTarget" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.smoothDividendTarget}" />
             </label>
-            <label class="space-y-1">Target net dividend €
+            <label class="space-y-1">${labelFor('netCashToPrivate', 'Target net dividend')} €
               <input data-policy="targetNetDividend" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.targetNetDividend}" />
             </label>
           </div>
@@ -1284,7 +1327,7 @@
             </div>
             <label class="flex items-center gap-2">
               <input data-policy-salary="netToPrivateBank" type="checkbox" class="border" ${timeline.policy.salary.netToPrivateBank ? 'checked' : ''} />
-              Net salary saved into private bank
+              Net salary saved into ${labelFor('privateBank', 'Private bank')}
             </label>
           </div>
           <div class="border rounded p-2 space-y-2">
@@ -1318,12 +1361,12 @@
             </label>
             <label class="space-y-1">Contribution source
               <select data-policy-transfer="privateToBVFrom" class="border rounded px-2 py-1 w-full">
-                <option value="bank" ${timeline.policy.transfers.privateToBVFrom === 'bank' ? 'selected' : ''}>Private bank</option>
-                <option value="other" ${timeline.policy.transfers.privateToBVFrom === 'other' ? 'selected' : ''}>Private other</option>
+                <option value="bank" ${timeline.policy.transfers.privateToBVFrom === 'bank' ? 'selected' : ''}>${labelFor('privateBank', 'Private bank')}</option>
+                <option value="other" ${timeline.policy.transfers.privateToBVFrom === 'other' ? 'selected' : ''}>${labelFor('privateOther', 'Private other')}</option>
               </select>
             </label>
           </div>
-          <label class="space-y-1">Manual cashflow adjustment (private bank) €
+          <label class="space-y-1">Manual cashflow adjustment (${labelFor('privateBank', 'Private bank')}) €
             <input data-policy="manualCashflowAdjustment" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.manualCashflowAdjustment}" />
           </label>
           <div class="flex flex-wrap gap-2">
@@ -1432,11 +1475,11 @@
 
       const years = Array.from({ length: state.globals.horizonYears }, (_, i) => state.globals.startYear + i);
       const columnDefs = [
-        { key: 'spendingNeedGross', label: 'Spending €' },
-        { key: 'privateBankSell', label: 'Private bank €' },
-        { key: 'privateOtherSell', label: 'Private other €' },
-        { key: 'bvDividendGross', label: 'BV dividend gross €' },
-        { key: 'targetNetDividend', label: 'Target net dividend €' },
+        { key: 'spendingNeedGross', label: `${labelFor('spendingNeedGross', 'Spending')} €` },
+        { key: 'privateBankSell', label: `${labelFor('privateBank', 'Private bank')} €` },
+        { key: 'privateOtherSell', label: `${labelFor('privateOther', 'Private other')} €` },
+        { key: 'bvDividendGross', label: `${labelFor('bvDividendGross', 'BV dividend gross')} €` },
+        { key: 'targetNetDividend', label: `${labelFor('netCashToPrivate', 'Target net dividend')} €` },
         { key: 'bvNewLoanToPrivate', label: 'New BV loan €' },
         { key: 'bvLoanRepaymentFromPrivate', label: 'Loan repayment €' },
         { key: 'dgaSalaryGross', label: 'DGA salary gross €' },
@@ -1445,10 +1488,10 @@
         { key: 'privateToBVContribution', label: 'Private→BV €' },
         { key: 'partnerDebtToBV', label: 'Partner debt €' },
         { key: 'connectedPersonsDebtToBV', label: 'Connected debt €' },
-        { key: 'privateBankReturnOverride', label: 'Private bank %' },
-        { key: 'privateOtherReturnOverride', label: 'Private other %' },
-        { key: 'bvCashReturnOverride', label: 'BV cash %' },
-        { key: 'bvInvestmentsReturnOverride', label: 'BV inv. %' }
+        { key: 'privateBankReturnOverride', label: `${labelFor('privateBank', 'Private bank')} %` },
+        { key: 'privateOtherReturnOverride', label: `${labelFor('privateOther', 'Private other')} %` },
+        { key: 'bvCashReturnOverride', label: `${labelFor('bvCash', 'BV cash')} %` },
+        { key: 'bvInvestmentsReturnOverride', label: `${labelFor('bvInvestments', 'BV investments')} %` }
       ];
       const columnByKey = Object.fromEntries(columnDefs.map((col) => [col.key, col]));
       const viewMode = timeline.viewMode || 'table';
@@ -1754,16 +1797,16 @@
             </label>
           </div>
           <div class="grid grid-cols-2 gap-2 text-xs mt-2">
-            <label class="space-y-1">Private bank %
+            <label class="space-y-1">${labelFor('privateBank', 'Private bank')} %
               <input data-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.privateBank * 100}" />
             </label>
-            <label class="space-y-1">Private other %
+            <label class="space-y-1">${labelFor('privateOther', 'Private other')} %
               <input data-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.privateOther * 100}" />
             </label>
-            <label class="space-y-1">BV dividend %
+            <label class="space-y-1">${labelFor('bvDividendGross', 'BV dividend')} %
               <input data-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.bvDividend * 100}" />
             </label>
-            <label class="space-y-1">BV loan %
+            <label class="space-y-1">${labelFor('bvLoan', 'BV loan')} %
               <input data-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${scenario.drawdownSimple.split.bvLoan * 100}" />
             </label>
           </div>
@@ -1974,25 +2017,29 @@
       });
     }
 
-    function bracketedTax(amount, threshold, brackets) {
-      let remaining = amount;
+    function bracketedTax(amount, freeAllowance = 0, brackets = []) {
+      const taxable = Math.max(0, amount - (freeAllowance || 0));
+      let remaining = taxable;
+      let lastUpTo = 0;
       let tax = 0;
       for (const bracket of brackets) {
         const upper = bracket.upTo === Infinity ? Infinity : bracket.upTo;
-        const width = Math.max(0, Math.min(remaining, upper - (threshold || 0)));
-        if (width <= 0) {
-          if (upper === Infinity) break;
-          continue;
+        const width = upper === Infinity ? remaining : Math.max(0, Math.min(remaining, upper - lastUpTo));
+        if (width > 0) {
+          tax += width * bracket.rate;
+          remaining -= width;
         }
-        tax += width * bracket.rate;
-        remaining -= width;
-        threshold = upper;
-        if (remaining <= 0) break;
-      }
-      if (remaining > 0 && brackets.length) {
-        tax += remaining * brackets[brackets.length - 1].rate;
+        lastUpTo = upper;
+        if (remaining <= 0 || upper === Infinity) break;
       }
       return tax;
+    }
+
+    function adjustBracketsForThreshold(brackets, threshold) {
+      if (!brackets.length) return brackets;
+      return brackets.map((bracket, index) => (
+        index === 0 ? { ...bracket, upTo: threshold } : { ...bracket }
+      ));
     }
 
     function computeBox3(year, state, params, numTaxpayers) {
@@ -2059,11 +2106,12 @@
     function computeDividendTaxes(year, grossDividend, params, numTaxpayers, scenarioToggle) {
       const withholdingTax = grossDividend * params.dividendWithholdingRate;
       const netDividendToPrivate = grossDividend - withholdingTax;
-      let threshold = params.box2LowBracketThreshold;
+      let threshold = params.box2LowBracketThreshold ?? (params.box2Brackets[0]?.upTo ?? 0);
       if (numTaxpayers === 2 && scenarioToggle) {
         threshold *= 2;
       }
-      const box2TaxOnDividendsGross = bracketedTax(grossDividend, threshold, params.box2Brackets);
+      const adjustedBrackets = adjustBracketsForThreshold(params.box2Brackets, threshold);
+      const box2TaxOnDividendsGross = bracketedTax(grossDividend, 0, adjustedBrackets);
       const box2WithholdingCredit = Math.min(withholdingTax, box2TaxOnDividendsGross);
       const box2TaxOnDividendsDue = Math.max(0, box2TaxOnDividendsGross - box2WithholdingCredit);
       const netCashToPrivate = grossDividend - withholdingTax - box2TaxOnDividendsDue;
@@ -2185,7 +2233,8 @@
       let box2TaxOnExcessBorrowing = 0;
       if (debtSum > currentThreshold) {
         excessAmount = debtSum - currentThreshold;
-        box2TaxOnExcessBorrowing = bracketedTax(excessAmount, box2ThresholdUsed, box2Brackets);
+        const adjustedBrackets = adjustBracketsForThreshold(box2Brackets, box2ThresholdUsed);
+        box2TaxOnExcessBorrowing = bracketedTax(excessAmount, 0, adjustedBrackets);
         if (params.allowThresholdCarryMechanism) {
           thresholdExtraState.value += excessAmount;
         }
@@ -2316,7 +2365,7 @@
         if (decision.privateBankSell > 0) {
           const actual = Math.min(privateBank, decision.privateBankSell);
           if (actual < decision.privateBankSell) {
-            warnings.push('Private bank sell capped by available balance.');
+            warnings.push(`${labelFor('privateBank')} sell capped by available balance.`);
           }
           privateBank -= actual;
           remainingSpending -= actual;
@@ -2325,7 +2374,7 @@
         if (decision.privateOtherSell > 0) {
           const actual = Math.min(privateOther, decision.privateOtherSell);
           if (actual < decision.privateOtherSell) {
-            warnings.push('Private other sell capped by available balance.');
+            warnings.push(`${labelFor('privateOther')} sell capped by available balance.`);
           }
           privateOther -= actual;
           remainingSpending -= actual;
@@ -2354,7 +2403,7 @@
 
         if (newLoanAmount > 0) {
           if (bvCash < newLoanAmount) {
-            warnings.push('BV cash insufficient for requested new loan.');
+            warnings.push(`${labelFor('bvCash')} insufficient for requested new loan.`);
             newLoanAmount = Math.max(0, bvCash);
           }
           bvCash -= newLoanAmount;
@@ -2368,7 +2417,7 @@
         if (repayment > 0) {
           repayment = Math.min(repayment, policyLoanBalance, privateBank);
           if (repayment < decision.bvLoanRepaymentFromPrivate) {
-            warnings.push('Loan repayment capped by available private bank or loan balance.');
+            warnings.push(`Loan repayment capped by available ${labelFor('privateBank')} or loan balance.`);
           }
           privateBank -= repayment;
           bvCash += repayment;
@@ -2380,7 +2429,7 @@
         const policyLoanInterest = policyLoanBalance * decision.interestRate;
         if (policyLoanInterest > 0) {
           if (privateBank < policyLoanInterest) {
-            warnings.push('Private bank insufficient to pay loan interest.');
+            warnings.push(`${labelFor('privateBank')} insufficient to pay loan interest.`);
           }
           privateBank -= policyLoanInterest;
           bvCash += policyLoanInterest;
@@ -2391,7 +2440,7 @@
         let payableDividend = 0;
         if (dividendGross > 0) {
           if (bvCash < dividendGross) {
-            warnings.push('BV cash insufficient for requested dividend.');
+            warnings.push(`${labelFor('bvCash')} insufficient for requested dividend.`);
           }
           payableDividend = Math.min(bvCash, dividendGross);
           bvCash -= payableDividend;
@@ -2400,7 +2449,7 @@
         privateBank += dividendTaxes.netDividendToPrivate;
         if (dividendTaxes.box2TaxOnDividendsDue > 0) {
           if (privateBank < dividendTaxes.box2TaxOnDividendsDue) {
-            warnings.push('Private bank insufficient to settle Box 2 dividend tax.');
+            warnings.push(`${labelFor('privateBank')} insufficient to settle Box 2 dividend tax.`);
           }
           privateBank = Math.max(0, privateBank - dividendTaxes.box2TaxOnDividendsDue);
         }
@@ -2415,7 +2464,7 @@
             privateBank += rebalance;
           }
           if (privateBank < spendingNeedGross) {
-            warnings.push('Insufficient private bank to cover spending need.');
+            warnings.push(`Insufficient ${labelFor('privateBank')} to cover spending need.`);
             spendingNeedGross = privateBank;
           }
           privateBank -= spendingNeedGross;
@@ -2477,11 +2526,54 @@
         }
 
         const totalTax = box3.box3Tax + cit.cit + dividendTaxes.withholdingTax + dividendTaxes.box2TaxOnDividendsDue + excess.box2TaxOnExcessBorrowing + box1Tax;
+        let taxesPaidFromWealth = dividendTaxes.withholdingTax + dividendTaxes.box2TaxOnDividendsDue;
+        if (state.globals.payTaxesFromCash) {
+          const payFromPrivate = (amount, label) => {
+            if (amount <= 0) return 0;
+            let remaining = amount;
+            const fromBank = Math.min(privateBank, remaining);
+            privateBank -= fromBank;
+            remaining -= fromBank;
+            const fromOther = Math.min(privateOther, remaining);
+            privateOther -= fromOther;
+            remaining -= fromOther;
+            if (remaining > 0) {
+              warnings.push(`${label} could not be fully paid from ${labelFor('privateBank')} / ${labelFor('privateOther')}.`);
+            }
+            return amount - remaining;
+          };
+          const payFromBV = (amount, label) => {
+            if (amount <= 0) return 0;
+            let remaining = amount;
+            const fromCash = Math.min(bvCash, remaining);
+            bvCash -= fromCash;
+            remaining -= fromCash;
+            const fromInvestments = Math.min(bvInvestments, remaining);
+            bvInvestments -= fromInvestments;
+            remaining -= fromInvestments;
+            if (remaining > 0) {
+              warnings.push(`${label} could not be fully paid from ${labelFor('bvCash')} / ${labelFor('bvInvestments')}.`);
+            }
+            return amount - remaining;
+          };
+          taxesPaidFromWealth += payFromPrivate(box3.box3Tax, LABELS.box3Tax);
+          taxesPaidFromWealth += payFromPrivate(excess.box2TaxOnExcessBorrowing, LABELS.box2Excess);
+          taxesPaidFromWealth += payFromBV(cit.cit, LABELS.cit);
+        }
         const endBalances = { privateBank, privateOther, privateDebt: totalPrivateDebt, bvCash, bvInvestments };
+        const startTotalWealth = totalWealth(startBalances);
+        const endTotalWealth = totalWealth(endBalances);
+        const totalReturns = returns.privateBank + returns.privateOther + returns.bvCash + returns.bvInvestments;
+        const netExternalCashflows = decision.manualCashflowAdjustment - spendingNeedGross;
+        const reconciliationDelta = endTotalWealth - (startTotalWealth + totalReturns + netExternalCashflows - taxesPaidFromWealth);
+        if (Math.abs(reconciliationDelta) > 1) {
+          warnings.push(`Reconciliation delta exceeds €1: ${formatCurrency(reconciliationDelta)}.`);
+        }
 
         perYear.push({
           year,
           startBalances,
+          startTotalWealth,
           returns,
           appliedReturns,
           loanFlow,
@@ -2496,7 +2588,11 @@
           box1Income,
           netCashToPrivate: dividendTaxes.netCashToPrivate,
           totalTax,
+          taxesPaidFromWealth,
+          netExternalCashflows,
+          reconciliationDelta,
           endBalances,
+          endTotalWealth,
           warnings
         });
       });
@@ -2522,8 +2618,8 @@
       const actual = { ...drawdown };
 
       const sources = [
-        { key: 'privateBank', label: 'Private bank' },
-        { key: 'privateOther', label: 'Private other' },
+        { key: 'privateBank', label: labelFor('privateBank', 'Private bank') },
+        { key: 'privateOther', label: labelFor('privateOther', 'Private other') },
         { key: 'bvDividend', label: 'BV dividend', bv: true },
         { key: 'bvLoan', label: 'BV loan', bv: true }
       ];
@@ -2731,26 +2827,26 @@
       results.forEach((result) => {
         headers.push(`${result.scenario.name} Total Tax`);
         if (showBreakdown) {
-          headers.push(`${result.scenario.name} Spending Gross`);
-          headers.push(`${result.scenario.name} Net Cash to Private`);
-          headers.push(`${result.scenario.name} Dividend Gross`);
-          headers.push(`${result.scenario.name} Dividend Withholding`);
-          headers.push(`${result.scenario.name} Box 2 Dividend Due`);
-          headers.push(`${result.scenario.name} Counted Debt`);
-          headers.push(`${result.scenario.name} Headroom`);
+          headers.push(`${result.scenario.name} ${labelFor('spendingNeedGross', 'Spending gross')}`);
+          headers.push(`${result.scenario.name} ${labelFor('netCashToPrivate', 'Net cash to private')}`);
+          headers.push(`${result.scenario.name} ${labelFor('bvDividendGross', 'Dividend gross')}`);
+          headers.push(`${result.scenario.name} ${labelFor('withholdingTax', 'Dividend withholding')}`);
+          headers.push(`${result.scenario.name} ${labelFor('box2DividendDue', 'Box 2 dividend due')}`);
+          headers.push(`${result.scenario.name} ${labelFor('debtSum', 'Counted debt')}`);
+          headers.push(`${result.scenario.name} ${labelFor('headroom', 'Headroom')}`);
           headers.push(`${result.scenario.name} Threshold Extra`);
-          headers.push(`${result.scenario.name} Current Threshold`);
-          headers.push(`${result.scenario.name} Box 3`);
-          headers.push(`${result.scenario.name} CIT`);
-          headers.push(`${result.scenario.name} Withholding (Div)`);
-          headers.push(`${result.scenario.name} Box 2 Div`);
-          headers.push(`${result.scenario.name} Box 2 Excess`);
+          headers.push(`${result.scenario.name} ${labelFor('currentThreshold', 'Current threshold')}`);
+          headers.push(`${result.scenario.name} ${labelFor('box3Tax', 'Box 3')}`);
+          headers.push(`${result.scenario.name} ${labelFor('cit', 'CIT')}`);
+          headers.push(`${result.scenario.name} ${labelFor('withholdingTax', 'Withholding (Div)')}`);
+          headers.push(`${result.scenario.name} ${labelFor('box2DividendDue', 'Box 2 Div')}`);
+          headers.push(`${result.scenario.name} ${labelFor('box2Excess', 'Box 2 Excess')}`);
           headers.push(`${result.scenario.name} Box 1`);
-          headers.push(`${result.scenario.name} Private bank end`);
-          headers.push(`${result.scenario.name} Private other end`);
+          headers.push(`${result.scenario.name} ${labelFor('privateBank', 'Private bank')} end`);
+          headers.push(`${result.scenario.name} ${labelFor('privateOther', 'Private other')} end`);
           headers.push(`${result.scenario.name} Private debt end`);
-          headers.push(`${result.scenario.name} BV cash end`);
-          headers.push(`${result.scenario.name} BV investments end`);
+          headers.push(`${result.scenario.name} ${labelFor('bvCash', 'BV cash')} end`);
+          headers.push(`${result.scenario.name} ${labelFor('bvInvestments', 'BV investments')} end`);
         }
         headers.push(`${result.scenario.name} End Private`);
         headers.push(`${result.scenario.name} End BV`);
@@ -2799,8 +2895,8 @@
               <div class="font-semibold text-xs">${result.scenario.name} — ${year}</div>
               <div class="mt-2 text-xs border rounded bg-slate-50 p-2">
                 <div class="font-semibold">Decision Summary</div>
-                <div>Spending need gross: ${formatCurrency(detail.decision.spendingNeedGross)} (actual: ${formatCurrency(detail.decision.actual?.spendingNeedGross || 0)})</div>
-                <div>Dividend gross: ${formatCurrency(detail.decision.bvDividendGross)} (actual: ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)})</div>
+                <div>${labelFor('spendingNeedGross', 'Spending need gross')}: ${formatCurrency(detail.decision.spendingNeedGross)} (actual: ${formatCurrency(detail.decision.actual?.spendingNeedGross || 0)})</div>
+                <div>${labelFor('bvDividendGross', 'Dividend gross')}: ${formatCurrency(detail.decision.bvDividendGross)} (actual: ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)})</div>
                 <div>New BV loan: ${formatCurrency(detail.decision.bvNewLoanToPrivate)} (actual: ${formatCurrency(detail.decision.actual?.bvNewLoanToPrivate || 0)})</div>
                 <div>Loan repayment: ${formatCurrency(detail.decision.bvLoanRepaymentFromPrivate)} (actual: ${formatCurrency(detail.decision.actual?.bvLoanRepaymentFromPrivate || 0)})</div>
                 <div>DGA salary: ${detail.decision.dgaSalaryEnabled ? formatCurrency(detail.decision.dgaSalaryGross) : 'Off'}</div>
@@ -2809,18 +2905,18 @@
               <div class="grid grid-cols-2 gap-2 text-xs mt-2">
                 <div>
                   <div class="font-semibold">Starting balances</div>
-                  <div>Private bank: ${formatCurrency(detail.startBalances.privateBank)}</div>
-                  <div>Private other: ${formatCurrency(detail.startBalances.privateOther)}</div>
+                  <div>${labelFor('privateBank', 'Private bank')}: ${formatCurrency(detail.startBalances.privateBank)}</div>
+                  <div>${labelFor('privateOther', 'Private other')}: ${formatCurrency(detail.startBalances.privateOther)}</div>
                   <div>Deductible debts: ${formatCurrency(detail.startBalances.privateDebt)}</div>
-                  <div>BV cash: ${formatCurrency(detail.startBalances.bvCash)}</div>
-                  <div>BV investments: ${formatCurrency(detail.startBalances.bvInvestments)}</div>
+                  <div>${labelFor('bvCash', 'BV cash')}: ${formatCurrency(detail.startBalances.bvCash)}</div>
+                  <div>${labelFor('bvInvestments', 'BV investments')}: ${formatCurrency(detail.startBalances.bvInvestments)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Decision Summary</div>
-                  <div>Spending need gross: ${formatCurrency(detail.decision.spendingNeedGross)}</div>
-                  <div>Private bank sell: ${formatCurrency(detail.decision.actual?.privateBankSell || 0)}</div>
-                  <div>Private other sell: ${formatCurrency(detail.decision.actual?.privateOtherSell || 0)}</div>
-                  <div>Dividend gross (actual): ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)}</div>
+                  <div>${labelFor('spendingNeedGross', 'Spending need gross')}: ${formatCurrency(detail.decision.spendingNeedGross)}</div>
+                  <div>${labelFor('privateBank', 'Private bank')} sell: ${formatCurrency(detail.decision.actual?.privateBankSell || 0)}</div>
+                  <div>${labelFor('privateOther', 'Private other')} sell: ${formatCurrency(detail.decision.actual?.privateOtherSell || 0)}</div>
+                  <div>${labelFor('bvDividendGross', 'Dividend gross')} (actual): ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)}</div>
                   <div>New BV loan: ${formatCurrency(detail.decision.actual?.bvNewLoanToPrivate || 0)}</div>
                   <div>Loan repayment: ${formatCurrency(detail.decision.actual?.bvLoanRepaymentFromPrivate || 0)}</div>
                   <div>DGA salary: ${detail.decision.dgaSalaryEnabled ? formatCurrency(detail.decision.dgaSalaryGross) : 'Off'}</div>
@@ -2830,10 +2926,10 @@
                 </div>
                 <div>
                   <div class="font-semibold">Returns applied</div>
-                  <div>Private bank: ${formatCurrency(detail.returns.privateBank)} (x${(1 + detail.appliedReturns.privateBank).toFixed(2)})</div>
-                  <div>Private other: ${formatCurrency(detail.returns.privateOther)} (x${(1 + detail.appliedReturns.privateOther).toFixed(2)})</div>
-                  <div>BV cash: ${formatCurrency(detail.returns.bvCash)} (x${(1 + detail.appliedReturns.bvCash).toFixed(2)})</div>
-                  <div>BV investments: ${formatCurrency(detail.returns.bvInvestments)} (x${(1 + detail.appliedReturns.bvInvestments).toFixed(2)})</div>
+                  <div>${labelFor('privateBank', 'Private bank')}: ${formatCurrency(detail.returns.privateBank)} (x${(1 + detail.appliedReturns.privateBank).toFixed(2)})</div>
+                  <div>${labelFor('privateOther', 'Private other')}: ${formatCurrency(detail.returns.privateOther)} (x${(1 + detail.appliedReturns.privateOther).toFixed(2)})</div>
+                  <div>${labelFor('bvCash', 'BV cash')}: ${formatCurrency(detail.returns.bvCash)} (x${(1 + detail.appliedReturns.bvCash).toFixed(2)})</div>
+                  <div>${labelFor('bvInvestments', 'BV investments')}: ${formatCurrency(detail.returns.bvInvestments)} (x${(1 + detail.appliedReturns.bvInvestments).toFixed(2)})</div>
                 </div>
                 <div>
                   <div class="font-semibold">Loan schedule</div>
@@ -2852,31 +2948,31 @@
                   <div>Share: ${formatPercent(detail.box3.share)}</div>
                   <div>Deemed return: ${formatCurrency(detail.box3.deemedReturn)}</div>
                   <div>Box 3 income: ${formatCurrency(detail.box3.box3Income)}</div>
-                  <div>Box 3 tax: ${formatCurrency(detail.box3.box3Tax)}</div>
+                  <div>${labelFor('box3Tax', 'Box 3 tax')}: ${formatCurrency(detail.box3.box3Tax)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">BV profit & CIT</div>
                   <div>Pre-tax profit: ${formatCurrency(detail.cit.bvPreTaxProfit)}</div>
-                  <div>CIT: ${formatCurrency(detail.cit.cit)}</div>
+                  <div>${labelFor('cit', 'CIT')}: ${formatCurrency(detail.cit.cit)}</div>
                   <div>After-tax profit: ${formatCurrency(detail.cit.bvAfterTaxProfit)}</div>
                   <div>Loss carryforward used: ${formatCurrency(detail.cit.appliedCarryforward || 0)}</div>
                   <div>Loss carryforward end: ${formatCurrency(detail.cit.lossCarryforwardEnd || 0)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Dividends</div>
-                  <div>Withholding tax: ${formatCurrency(detail.dividendTaxes.withholdingTax)}</div>
+                  <div>${labelFor('withholdingTax', 'Withholding tax')}: ${formatCurrency(detail.dividendTaxes.withholdingTax)}</div>
                   <div>Box 2 gross: ${formatCurrency(detail.dividendTaxes.box2TaxOnDividendsGross)}</div>
                   <div>Withholding credit: ${formatCurrency(detail.dividendTaxes.box2WithholdingCredit)}</div>
-                  <div>Box 2 due: ${formatCurrency(detail.dividendTaxes.box2TaxOnDividendsDue)}</div>
+                  <div>${labelFor('box2DividendDue', 'Box 2 due')}: ${formatCurrency(detail.dividendTaxes.box2TaxOnDividendsDue)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Excessief lenen</div>
-                  <div>Debt sum: ${formatCurrency(detail.excessBorrowing.debtSum)}</div>
-                  <div>Threshold: ${formatCurrency(detail.excessBorrowing.currentThreshold)}</div>
-                  <div>Headroom: ${formatCurrency(detail.excessBorrowing.headroom)}</div>
+                  <div>${labelFor('debtSum', 'Debt sum')}: ${formatCurrency(detail.excessBorrowing.debtSum)}</div>
+                  <div>${labelFor('currentThreshold', 'Threshold')}: ${formatCurrency(detail.excessBorrowing.currentThreshold)}</div>
+                  <div>${labelFor('headroom', 'Headroom')}: ${formatCurrency(detail.excessBorrowing.headroom)}</div>
                   <div>Threshold extra: ${formatCurrency(detail.thresholdExtra)}</div>
                   <div>Excess amount: ${formatCurrency(detail.excessBorrowing.excessAmount)}</div>
-                  <div>Box 2 on excess: ${formatCurrency(detail.excessBorrowing.box2TaxOnExcessBorrowing)}</div>
+                  <div>${labelFor('box2Excess', 'Box 2 on excess')}: ${formatCurrency(detail.excessBorrowing.box2TaxOnExcessBorrowing)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Box 1</div>
@@ -2884,12 +2980,21 @@
                   <div>Tax: ${formatCurrency(detail.box1Tax)}</div>
                 </div>
                 <div>
+                  <div class="font-semibold">Reconciliation</div>
+                  <div>Start wealth: ${formatCurrency(detail.startTotalWealth)}</div>
+                  <div>End wealth: ${formatCurrency(detail.endTotalWealth)}</div>
+                  <div>Total returns: ${formatCurrency(detail.returns.privateBank + detail.returns.privateOther + detail.returns.bvCash + detail.returns.bvInvestments)}</div>
+                  <div>Net external cashflows: ${formatCurrency(detail.netExternalCashflows)}</div>
+                  <div>Taxes paid from wealth: ${formatCurrency(detail.taxesPaidFromWealth)}</div>
+                  <div>Reconciliation delta: ${formatCurrency(detail.reconciliationDelta)}</div>
+                </div>
+                <div>
                   <div class="font-semibold">End balances</div>
-                  <div>Private bank: ${formatCurrency(detail.endBalances.privateBank)}</div>
-                  <div>Private other: ${formatCurrency(detail.endBalances.privateOther)}</div>
+                  <div>${labelFor('privateBank', 'Private bank')}: ${formatCurrency(detail.endBalances.privateBank)}</div>
+                  <div>${labelFor('privateOther', 'Private other')}: ${formatCurrency(detail.endBalances.privateOther)}</div>
                   <div>Deductible debts: ${formatCurrency(detail.endBalances.privateDebt)}</div>
-                  <div>BV cash: ${formatCurrency(detail.endBalances.bvCash)}</div>
-                  <div>BV investments: ${formatCurrency(detail.endBalances.bvInvestments)}</div>
+                  <div>${labelFor('bvCash', 'BV cash')}: ${formatCurrency(detail.endBalances.bvCash)}</div>
+                  <div>${labelFor('bvInvestments', 'BV investments')}: ${formatCurrency(detail.endBalances.bvInvestments)}</div>
                 </div>
               </div>
               ${detail.warnings.length ? `<div class="text-rose-600 text-xs mt-2">Warnings: ${detail.warnings.join(', ')}</div>` : ''}
@@ -2947,6 +3052,150 @@
           reader.readAsText(file);
         });
       }
+    }
+
+    function runAuditTests() {
+      const originalGlobals = deepClone(state.globals);
+      const originalTaxParams = deepClone(state.taxParamsByYear);
+      const lines = [];
+      let passCount = 0;
+      let failCount = 0;
+      const record = (name, pass, detail = '') => {
+        if (pass) {
+          passCount += 1;
+          lines.push(`PASS - ${name}`);
+        } else {
+          failCount += 1;
+          lines.push(`FAIL - ${name}${detail ? `: ${detail}` : ''}`);
+        }
+      };
+      const assertClose = (name, actual, expected, tolerance = 1e-2) => {
+        const pass = Math.abs(actual - expected) <= tolerance;
+        record(name, pass, `expected ${expected}, got ${actual}`);
+      };
+      const buildScenario = (overrides = {}) => {
+        const scenario = defaultScenario();
+        scenario.balances = {
+          privateBank: 0,
+          privateOther: 0,
+          privateDebtBV: 0,
+          privateDebtOther: 0,
+          bvCash: 0,
+          bvInvestments: 0,
+          retainedEarningsStart: 0,
+          ...(overrides.balances || {})
+        };
+        scenario.returns = {
+          privateBank: 0,
+          privateOther: 0,
+          privateOtherEquity: 0,
+          privateOtherBond: 0,
+          bvCash: 0,
+          bvInvestments: 0,
+          ...(overrides.returns || {})
+        };
+        scenario.decisionTimeline.policy.spendingNeedGross = 0;
+        scenario.decisionTimeline.policy.drawdownSplit = {
+          privateBank: 0,
+          privateOther: 0,
+          bvDividend: 0,
+          bvLoan: 0
+        };
+        scenario.decisionTimeline.policy.dividendPolicy = 'manual';
+        scenario.decisionTimeline.policy.targetNetDividend = 0;
+        scenario.decisionTimeline.policy.smoothDividendTarget = 0;
+        scenario.decisionTimeline.policy.loanPolicy.newLoan = 0;
+        scenario.decisionTimeline.policy.loanPolicy.repayment = 0;
+        scenario.decisionTimeline.policy.transfers.privateToBV = 0;
+        scenario.decisionTimeline.policy.manualCashflowAdjustment = 0;
+        scenario.decisionTimeline.overrides = overrides.overrides || {};
+        scenario.loans = [];
+        scenario.box2UseDoubleLowBracket = false;
+        scenario.allowLossCarryforward = false;
+        scenario.box1UseBrackets = false;
+        return scenario;
+      };
+      try {
+        assertClose('Bracket tax: free allowance applied', bracketedTax(100, 50, [
+          { upTo: 50, rate: 0.1 },
+          { upTo: Infinity, rate: 0.2 }
+        ]), 5);
+        assertClose('Bracket tax: progressive brackets', bracketedTax(150, 0, [
+          { upTo: 100, rate: 0.1 },
+          { upTo: Infinity, rate: 0.2 }
+        ]), 20);
+
+        state.globals = { ...defaultGlobals, startYear: 2026, horizonYears: 1, numTaxpayers: 1, payTaxesFromCash: true };
+        state.taxParamsByYear = { 2026: deepClone(defaultTaxParamsByYear[2026]) };
+
+        const emptyScenario = buildScenario();
+        const emptyResult = simulateScenario(emptyScenario, [2026]).perYear[0];
+        assertClose('Reconciliation: empty scenario', emptyResult.reconciliationDelta, 0, 0.01);
+
+        state.taxParamsByYear = {
+          2026: {
+            ...deepClone(defaultTaxParamsByYear[2026]),
+            box3TaxRate: 0,
+            deemedReturnBank: 0,
+            deemedReturnOther: 0,
+            deemedReturnDebt: 0,
+            box2Brackets: [{ upTo: Infinity, rate: 0.1 }],
+            box2LowBracketThreshold: 0
+          }
+        };
+        const dividendScenario = buildScenario({
+          balances: { bvCash: 10000 },
+          overrides: { 2026: { bvDividendGross: 10000 } }
+        });
+        const dividendResult = simulateScenario(dividendScenario, [2026]).perYear[0];
+        assertClose('Dividend net cash to private', dividendResult.endBalances.privateBank, 8500, 0.01);
+        assertClose('Reconciliation: dividend scenario', dividendResult.reconciliationDelta, 0, 0.01);
+
+        state.taxParamsByYear = {
+          2026: {
+            ...deepClone(defaultTaxParamsByYear[2026]),
+            box3TaxRate: 0,
+            deemedReturnBank: 0,
+            deemedReturnOther: 0,
+            deemedReturnDebt: 0,
+            citBrackets: [{ upTo: Infinity, rate: 0.5 }]
+          }
+        };
+        const citScenario = buildScenario({
+          balances: { bvCash: 1000 },
+          returns: { bvCash: 0.1 }
+        });
+        const citResult = simulateScenario(citScenario, [2026]).perYear[0];
+        assertClose('CIT paid from BV cash', citResult.endBalances.bvCash, 1050, 0.01);
+        assertClose('Reconciliation: CIT scenario', citResult.reconciliationDelta, 0, 0.01);
+
+        state.taxParamsByYear = {
+          2026: {
+            ...deepClone(defaultTaxParamsByYear[2026]),
+            box3TaxRate: 0.5,
+            box3AllowancePerPerson: 0,
+            deemedReturnBank: 1,
+            deemedReturnOther: 0,
+            deemedReturnDebt: 0,
+            box3DebtThresholdPerPerson: 0
+          }
+        };
+        const box3Scenario = buildScenario({
+          balances: { privateBank: 1000 }
+        });
+        const box3Result = simulateScenario(box3Scenario, [2026]).perYear[0];
+        assertClose('Box 3 paid from private cash', box3Result.endBalances.privateBank, 500, 0.01);
+        assertClose('Reconciliation: Box 3 scenario', box3Result.reconciliationDelta, 0, 0.01);
+
+      } catch (error) {
+        record('Audit execution', false, error.message || String(error));
+      } finally {
+        state.globals = originalGlobals;
+        state.taxParamsByYear = originalTaxParams;
+      }
+
+      const summary = `Audit ${failCount ? 'FAIL' : 'PASS'} — ${passCount} passed, ${failCount} failed`;
+      openModal('Test / Audit Results', `${summary}\n\n${lines.join('\n')}`, () => {});
     }
 
     init();
