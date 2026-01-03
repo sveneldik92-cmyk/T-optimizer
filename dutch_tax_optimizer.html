@@ -57,6 +57,7 @@
             <div class="flex gap-2">
               <button id="exportProject" class="px-2 py-1 border rounded text-xs">Export</button>
               <button id="importProject" class="px-2 py-1 border rounded text-xs">Import</button>
+              <button id="exportActionsCsv" class="px-2 py-1 border rounded text-xs">Download Actions CSV</button>
               <button id="resetProject" class="px-2 py-1 border rounded text-xs text-rose-600">Reset</button>
             </div>
           </div>
@@ -132,7 +133,13 @@
       </section>
 
       <section>
-        <h2 class="font-semibold mb-2">Wealth & Tax Chart</h2>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-semibold">Charts</h2>
+          <div class="flex gap-2 text-xs">
+            <button id="chartModeWealth" class="border rounded px-2 py-1 bg-slate-900 text-white">Wealth vs Taxes</button>
+            <button id="chartModeDebt" class="border rounded px-2 py-1">Debt & Headroom</button>
+          </div>
+        </div>
         <div class="bg-white border rounded p-3">
           <canvas id="taxChart" height="120"></canvas>
         </div>
@@ -167,6 +174,7 @@
   <script>
     const STORAGE_PROJECT = 'dto_project_v1';
     const STORAGE_VAULT = 'dto_vault_v1';
+    const SCHEMA_VERSION = 2;
 
     const defaultTaxParamsByYear = {
       2026: {
@@ -207,32 +215,83 @@
       notes: '',
       active: true,
       box2UseDoubleLowBracket: true,
+      allowExtremeReturns: false,
+      allowLossCarryforward: true,
       balances: {
         privateBank: 500000,
         privateOther: 500000,
         privateDebt: 0,
+        privateDebtBV: 0,
+        privateDebtOther: 0,
         bvCash: 100000,
-        bvInvestments: 0
+        bvInvestments: 0,
+        retainedEarningsStart: 0
+      },
+      assetMix: {
+        equityShare: 0.7
       },
       returns: {
         privateBank: 0.01,
         privateOther: 0.05,
+        privateOtherEquity: 0.07,
+        privateOtherBond: 0.03,
         bvCash: 0.01,
         bvInvestments: 0.05
       },
       loans: [],
-      drawdownMode: 'simple',
-      drawdownSimple: {
-        amount: 40000,
-        split: {
-          privateBank: 0.4,
-          privateOther: 0.2,
-          bvDividend: 0.2,
-          bvLoan: 0.2
+      decisionTimeline: {
+        mode: 'policy',
+        policy: {
+          spendingNeedGross: 40000,
+          drawdownSplit: {
+            privateBank: 0.4,
+            privateOther: 0.2,
+            bvDividend: 0.2,
+            bvLoan: 0.2
+          },
+          autoRebalance: true,
+          dividendPolicy: 'manual',
+          smoothDividendTarget: 0,
+          targetNetDividend: 0,
+          salary: {
+            enabled: false,
+            baseGross: 0,
+            growthRate: 0.02,
+            growthType: 'inflation',
+            netToPrivateBank: false
+          },
+          loanPolicy: {
+            newLoan: 0,
+            repayment: 0,
+            interestRate: 0.03,
+            amortizationType: 'interestOnly',
+            avoidExcessBorrowing: true
+          },
+          transfers: {
+            privateToBV: 0,
+            privateToBVFrom: 'bank',
+            bvToPrivateCapitalReturn: 0
+          },
+          manualCashflowAdjustment: 0
         },
-        autoRebalance: true
+        overrides: {},
+        overrideColumns: {
+          spendingNeedGross: true,
+          privateBankSell: true,
+          privateOtherSell: true,
+          bvDividendGross: true,
+          targetNetDividend: false,
+          bvNewLoanToPrivate: true,
+          bvLoanRepaymentFromPrivate: true,
+          dgaSalaryGross: false,
+          dgaSalaryEnabled: false,
+          interestRate: false,
+          privateToBVContribution: false,
+          partnerDebtToBV: false,
+          connectedPersonsDebtToBV: false,
+          returnOverride: false
+        }
       },
-      drawdownAdvanced: {},
       dgaSalaryEnabled: false,
       dgaSalaryAmount: 0,
       addNetIncomeToPrivateBank: false,
@@ -372,12 +431,84 @@
       }
     ];
 
+    function normalizeScenario(rawScenario) {
+      const base = defaultScenario();
+      const scenario = {
+        ...base,
+        ...rawScenario
+      };
+      scenario.balances = { ...base.balances, ...(rawScenario.balances || {}) };
+      scenario.returns = { ...base.returns, ...(rawScenario.returns || {}) };
+      scenario.assetMix = { ...base.assetMix, ...(rawScenario.assetMix || {}) };
+      scenario.decisionTimeline = { ...base.decisionTimeline, ...(rawScenario.decisionTimeline || {}) };
+      scenario.decisionTimeline.policy = { ...base.decisionTimeline.policy, ...(rawScenario.decisionTimeline?.policy || {}) };
+      scenario.decisionTimeline.policy.drawdownSplit = {
+        ...base.decisionTimeline.policy.drawdownSplit,
+        ...(rawScenario.decisionTimeline?.policy?.drawdownSplit || {})
+      };
+      scenario.decisionTimeline.policy.salary = {
+        ...base.decisionTimeline.policy.salary,
+        ...(rawScenario.decisionTimeline?.policy?.salary || {})
+      };
+      scenario.decisionTimeline.policy.loanPolicy = {
+        ...base.decisionTimeline.policy.loanPolicy,
+        ...(rawScenario.decisionTimeline?.policy?.loanPolicy || {})
+      };
+      scenario.decisionTimeline.policy.transfers = {
+        ...base.decisionTimeline.policy.transfers,
+        ...(rawScenario.decisionTimeline?.policy?.transfers || {})
+      };
+      scenario.decisionTimeline.overrideColumns = {
+        ...base.decisionTimeline.overrideColumns,
+        ...(rawScenario.decisionTimeline?.overrideColumns || {})
+      };
+      scenario.decisionTimeline.overrides = rawScenario.decisionTimeline?.overrides || {};
+
+      if (rawScenario.drawdownSimple && !rawScenario.decisionTimeline) {
+        scenario.decisionTimeline.policy.spendingNeedGross = rawScenario.drawdownSimple.amount || 0;
+        scenario.decisionTimeline.policy.drawdownSplit = {
+          ...scenario.decisionTimeline.policy.drawdownSplit,
+          privateBank: rawScenario.drawdownSimple.split?.privateBank ?? scenario.decisionTimeline.policy.drawdownSplit.privateBank,
+          privateOther: rawScenario.drawdownSimple.split?.privateOther ?? scenario.decisionTimeline.policy.drawdownSplit.privateOther,
+          bvDividend: rawScenario.drawdownSimple.split?.bvDividend ?? scenario.decisionTimeline.policy.drawdownSplit.bvDividend,
+          bvLoan: rawScenario.drawdownSimple.split?.bvLoan ?? scenario.decisionTimeline.policy.drawdownSplit.bvLoan
+        };
+        scenario.decisionTimeline.policy.autoRebalance = rawScenario.drawdownSimple.autoRebalance ?? scenario.decisionTimeline.policy.autoRebalance;
+      }
+
+      if (rawScenario.drawdownAdvanced && !rawScenario.decisionTimeline?.overrides) {
+        Object.entries(rawScenario.drawdownAdvanced).forEach(([year, data]) => {
+          scenario.decisionTimeline.overrides[year] = {
+            ...(scenario.decisionTimeline.overrides[year] || {}),
+            privateBankSell: data.privateBank || 0,
+            privateOtherSell: data.privateOther || 0,
+            bvDividendGross: data.bvDividend || 0,
+            bvNewLoanToPrivate: data.bvLoan || 0
+          };
+        });
+      }
+
+      if (rawScenario.dgaSalaryEnabled && !scenario.decisionTimeline.policy.salary.enabled) {
+        scenario.decisionTimeline.policy.salary.enabled = rawScenario.dgaSalaryEnabled;
+        scenario.decisionTimeline.policy.salary.baseGross = rawScenario.dgaSalaryAmount || scenario.decisionTimeline.policy.salary.baseGross;
+        scenario.decisionTimeline.policy.salary.netToPrivateBank = rawScenario.addNetIncomeToPrivateBank ?? scenario.decisionTimeline.policy.salary.netToPrivateBank;
+      }
+
+      if (scenario.balances.privateDebt && (!scenario.balances.privateDebtBV && !scenario.balances.privateDebtOther)) {
+        scenario.balances.privateDebtOther = scenario.balances.privateDebt;
+      }
+      scenario.balances.privateDebt = (scenario.balances.privateDebtBV || 0) + (scenario.balances.privateDebtOther || 0);
+
+      return scenario;
+    }
+
     const state = {
       globals: {
         startYear: 2026,
         horizonYears: 30,
         inflation: 0.02,
-        numTaxpayers: 2
+        numTaxpayers: 2,
+        chartMode: 'wealth'
       },
       scenarios: [],
       taxParamsByYear: structuredClone(defaultTaxParamsByYear),
@@ -413,25 +544,53 @@
       return JSON.parse(JSON.stringify(obj));
     }
 
+    function downloadFile(filename, content, type = 'text/plain') {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function applyReturnGuardrails(scenario, value) {
+      if (scenario.allowExtremeReturns) return value;
+      return Math.min(0.25, Math.max(-0.5, value));
+    }
+
+    function computePrivateOtherReturn(scenario) {
+      const mix = scenario.assetMix?.equityShare ?? 0.7;
+      const equity = scenario.returns.privateOtherEquity ?? scenario.returns.privateOther;
+      const bond = scenario.returns.privateOtherBond ?? scenario.returns.privateOther;
+      return (mix * equity) + ((1 - mix) * bond);
+    }
+
     function init() {
       const stored = localStorage.getItem(STORAGE_PROJECT);
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          state.globals = parsed.globals;
-          state.scenarios = parsed.scenarios;
+          state.globals = parsed.globals || state.globals;
+          const scenarios = parsed.scenarios || [];
+          state.scenarios = scenarios.map((scenario) => normalizeScenario(scenario));
           state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
         } catch (error) {
           console.warn('Failed to load project, using defaults', error);
-          state.scenarios = deepClone(sampleScenarios);
+          state.scenarios = deepClone(sampleScenarios).map((scenario) => normalizeScenario(scenario));
         }
       } else {
-        state.scenarios = deepClone(sampleScenarios);
+        state.scenarios = deepClone(sampleScenarios).map((scenario) => normalizeScenario(scenario));
       }
       const vaultStored = localStorage.getItem(STORAGE_VAULT);
       if (vaultStored) {
         try {
-          state.vault = JSON.parse(vaultStored);
+          state.vault = JSON.parse(vaultStored).map((item) => ({
+            ...item,
+            scenario: item.scenario ? normalizeScenario(item.scenario) : item.scenario
+          }));
         } catch (error) {
           console.warn('Failed to load vault', error);
           state.vault = [];
@@ -446,6 +605,7 @@
 
     function saveProject() {
       localStorage.setItem(STORAGE_PROJECT, JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
         globals: state.globals,
         scenarios: state.scenarios,
         taxParamsByYear: state.taxParamsByYear
@@ -461,6 +621,14 @@
       document.getElementById('horizonYears').value = state.globals.horizonYears;
       document.getElementById('inflation').value = state.globals.inflation * 100;
       document.getElementById('numTaxpayers').value = state.globals.numTaxpayers;
+      const chartModeWealth = document.getElementById('chartModeWealth');
+      const chartModeDebt = document.getElementById('chartModeDebt');
+      if (chartModeWealth && chartModeDebt) {
+        chartModeWealth.classList.toggle('bg-slate-900', state.globals.chartMode === 'wealth');
+        chartModeWealth.classList.toggle('text-white', state.globals.chartMode === 'wealth');
+        chartModeDebt.classList.toggle('bg-slate-900', state.globals.chartMode === 'debt');
+        chartModeDebt.classList.toggle('text-white', state.globals.chartMode === 'debt');
+      }
 
       document.getElementById('startYear').addEventListener('input', (event) => {
         state.globals.startYear = Number(event.target.value || 0);
@@ -483,6 +651,21 @@
         saveProject();
         runSimulation();
       });
+
+      if (chartModeWealth && chartModeDebt) {
+        chartModeWealth.addEventListener('click', () => {
+          state.globals.chartMode = 'wealth';
+          bindGlobalInputs();
+          saveProject();
+          runSimulation();
+        });
+        chartModeDebt.addEventListener('click', () => {
+          state.globals.chartMode = 'debt';
+          bindGlobalInputs();
+          saveProject();
+          runSimulation();
+        });
+      }
 
       document.getElementById('addScenario').addEventListener('click', () => {
         const scenario = defaultScenario();
@@ -515,6 +698,7 @@
 
       document.getElementById('exportProject').addEventListener('click', () => {
         openModal('Export Project JSON', JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
           globals: state.globals,
           scenarios: state.scenarios,
           taxParamsByYear: state.taxParamsByYear
@@ -527,8 +711,8 @@
         openModal('Import Project JSON', '', (text) => {
           try {
             const parsed = JSON.parse(text);
-            state.globals = parsed.globals;
-            state.scenarios = parsed.scenarios;
+            state.globals = parsed.globals || state.globals;
+            state.scenarios = (parsed.scenarios || []).map((scenario) => normalizeScenario(scenario));
             state.taxParamsByYear = parsed.taxParamsByYear || structuredClone(defaultTaxParamsByYear);
             saveProject();
             bindGlobalInputs();
@@ -541,9 +725,54 @@
         }, true);
       });
 
+      document.getElementById('exportActionsCsv').addEventListener('click', () => {
+        const horizon = state.globals.horizonYears;
+        const years = Array.from({ length: horizon }, (_, i) => state.globals.startYear + i);
+        const headers = [
+          'scenarioName',
+          'year',
+          'spendingNeedGross',
+          'privateBankSell',
+          'privateOtherSell',
+          'bvDividendGross',
+          'targetNetDividend',
+          'bvNewLoanToPrivate',
+          'bvLoanRepaymentFromPrivate',
+          'dgaSalaryGross',
+          'interestRate',
+          'privateToBVContribution',
+          'partnerDebtToBV',
+          'connectedPersonsDebtToBV'
+        ];
+        const rows = [headers.join(',')];
+        state.scenarios.forEach((scenario) => {
+          years.forEach((year, index) => {
+            const params = getTaxParamsForYear(year);
+            const decision = resolveDecisionForYear(scenario, year, index, params);
+            rows.push([
+              `"${scenario.name.replace(/"/g, '""')}"`,
+              year,
+              decision.spendingNeedGross,
+              decision.privateBankSell,
+              decision.privateOtherSell,
+              decision.bvDividendGross,
+              decision.targetNetDividend,
+              decision.bvNewLoanToPrivate,
+              decision.bvLoanRepaymentFromPrivate,
+              decision.dgaSalaryGross,
+              decision.interestRate,
+              decision.privateToBVContribution,
+              decision.partnerDebtToBV,
+              decision.connectedPersonsDebtToBV
+            ].join(','));
+          });
+        });
+        downloadFile('decision_actions.csv', rows.join('\n'), 'text/csv');
+      });
+
       document.getElementById('resetProject').addEventListener('click', () => {
         if (!confirm('Reset project to sample scenarios?')) return;
-        state.scenarios = deepClone(sampleScenarios);
+        state.scenarios = deepClone(sampleScenarios).map((scenario) => normalizeScenario(scenario));
         state.taxParamsByYear = structuredClone(defaultTaxParamsByYear);
         saveProject();
         bindGlobalInputs();
@@ -561,7 +790,10 @@
       document.getElementById('importVault').addEventListener('click', () => {
         openModal('Import Vault JSON', '', (text) => {
           try {
-            state.vault = JSON.parse(text);
+            state.vault = JSON.parse(text).map((item) => ({
+              ...item,
+              scenario: item.scenario ? normalizeScenario(item.scenario) : item.scenario
+            }));
             saveVault();
             renderVault();
           } catch (error) {
@@ -575,10 +807,14 @@
         if (!scenario) return;
         const name = prompt('Vault name', scenario.name);
         if (!name) return;
+        const description = prompt('Description (optional)', scenario.notes || '') || '';
+        const assumptions = prompt('Key assumptions (optional)', '') || '';
         state.vault.push({
           id: crypto.randomUUID(),
           name,
           notes: scenario.notes || '',
+          description,
+          assumptions,
           timestamp: new Date().toISOString(),
           snapshot: false,
           scenario: deepClone(scenario)
@@ -592,10 +828,14 @@
         if (!scenario) return;
         const name = prompt('Snapshot name', `${scenario.name} (snapshot)`);
         if (!name) return;
+        const description = prompt('Description (optional)', scenario.notes || '') || '';
+        const assumptions = prompt('Key assumptions (optional)', '') || '';
         state.vault.push({
           id: crypto.randomUUID(),
           name,
           notes: scenario.notes || '',
+          description,
+          assumptions,
           timestamp: new Date().toISOString(),
           snapshot: true,
           scenario: deepClone(scenario)
@@ -694,56 +934,96 @@
       ui.scenarioEditor.innerHTML = `
         <section class="space-y-2">
           <h3 class="font-semibold">Primary Settings</h3>
-          <div class="grid grid-cols-2 gap-2 text-xs">
-            <label class="space-y-1">Private bank
-              <input data-field="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
-            </label>
-            <label class="space-y-1">Private other
-              <input data-field="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
-            </label>
-            <label class="space-y-1">Deductible debts
-              <input data-field="privateDebt" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebt}" />
-            </label>
-            <label class="space-y-1">BV cash
-              <input data-field="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
-            </label>
-            <label class="space-y-1">BV investments
-              <input data-field="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
-            </label>
-          </div>
+          <details open class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">Starting State</summary>
+            <div class="p-2 space-y-2 text-xs">
+              <div class="grid grid-cols-2 gap-2">
+                <label class="space-y-1">Private bank
+                  <input data-balance="privateBank" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateBank}" />
+                </label>
+                <label class="space-y-1">Private other
+                  <input data-balance="privateOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateOther}" />
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="space-y-1">Private debt (BV loans)
+                  <input data-balance="privateDebtBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtBV}" />
+                </label>
+                <label class="space-y-1">Private debt (other)
+                  <input data-balance="privateDebtOther" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.privateDebtOther}" />
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="space-y-1">BV cash
+                  <input data-balance="bvCash" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvCash}" />
+                </label>
+                <label class="space-y-1">BV investments
+                  <input data-balance="bvInvestments" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.bvInvestments}" />
+                </label>
+              </div>
+              <label class="space-y-1">Retained earnings (start)
+                <input data-balance="retainedEarningsStart" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.balances.retainedEarningsStart}" />
+              </label>
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <span>Asset mix (Other assets)</span>
+                  <span class="text-slate-500">${Math.round(scenario.assetMix.equityShare * 100)}% equities</span>
+                </div>
+                <input data-mix="equityShare" type="range" min="0" max="100" value="${scenario.assetMix.equityShare * 100}" class="w-full" />
+                <div class="text-[11px] text-slate-500">Mix impacts Private Other return only.</div>
+              </div>
+            </div>
+          </details>
+
+          <details class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">Return assumptions (% per year)</summary>
+            <div class="p-2 space-y-2 text-xs">
+              <div class="grid grid-cols-2 gap-2">
+                <label class="space-y-1">Private bank %
+                  <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
+                </label>
+                <label class="space-y-1">Private other (manual) %
+                  <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
+                </label>
+                <label class="space-y-1">BV cash %
+                  <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
+                </label>
+                <label class="space-y-1">BV investments %
+                  <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="space-y-1">Equity return %
+                  <input data-return="privateOtherEquity" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherEquity * 100}" />
+                </label>
+                <label class="space-y-1">Bond return %
+                  <input data-return="privateOtherBond" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOtherBond * 100}" />
+                </label>
+              </div>
+              <label class="flex items-center gap-2">
+                <input data-toggle="allowExtremeReturns" type="checkbox" class="border" ${scenario.allowExtremeReturns ? 'checked' : ''} />
+                Allow extreme returns (disable guardrails)
+              </label>
+              <div class="text-[11px] text-slate-500">Guardrails clamp to -50% / +25% unless enabled.</div>
+            </div>
+          </details>
+
+          <details class="border rounded">
+            <summary class="p-2 cursor-pointer font-semibold">Decision Timeline (Policy + Overrides)</summary>
+            <div class="p-2 space-y-2 text-xs">
+              <div class="flex gap-2">
+                <button data-timeline-mode="policy" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'policy' ? 'bg-slate-900 text-white' : ''}">Policy Mode</button>
+                <button data-timeline-mode="overrides" class="timelineMode border rounded px-2 py-1 ${scenario.decisionTimeline.mode === 'overrides' ? 'bg-slate-900 text-white' : ''}">Overrides Mode</button>
+              </div>
+              <div id="decisionTimelineEditor"></div>
+            </div>
+          </details>
         </section>
 
         <section class="space-y-2">
-          <h3 class="font-semibold">Return assumptions</h3>
-          <div class="grid grid-cols-2 gap-2 text-xs">
-            <label class="space-y-1">Private bank %
-              <input data-return="privateBank" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateBank * 100}" />
-            </label>
-            <label class="space-y-1">Private other %
-              <input data-return="privateOther" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.privateOther * 100}" />
-            </label>
-            <label class="space-y-1">BV cash %
-              <input data-return="bvCash" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvCash * 100}" />
-            </label>
-            <label class="space-y-1">BV investments %
-              <input data-return="bvInvestments" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${scenario.returns.bvInvestments * 100}" />
-            </label>
-          </div>
-        </section>
-
-        <section class="space-y-2">
-          <h3 class="font-semibold">Loans</h3>
+          <h3 class="font-semibold">Loans (existing agreements)</h3>
           <div id="loanList" class="space-y-2"></div>
           <button id="addLoan" class="text-xs border rounded px-2 py-1">Add loan</button>
-        </section>
-
-        <section class="space-y-2">
-          <h3 class="font-semibold">Drawdown planner</h3>
-          <div class="flex gap-2 text-xs">
-            <button data-mode="simple" class="drawdownMode border rounded px-2 py-1 ${scenario.drawdownMode === 'simple' ? 'bg-slate-900 text-white' : ''}">Simple rule</button>
-            <button data-mode="advanced" class="drawdownMode border rounded px-2 py-1 ${scenario.drawdownMode === 'advanced' ? 'bg-slate-900 text-white' : ''}">Advanced table</button>
-          </div>
-          <div id="drawdownEditor"></div>
         </section>
 
         <section class="space-y-2">
@@ -752,32 +1032,34 @@
             <input id="box2Double" type="checkbox" class="border" ${scenario.box2UseDoubleLowBracket ? 'checked' : ''} />
             Box 2 double low bracket (partners)
           </label>
+          <label class="text-xs flex items-center gap-2">
+            <input id="allowLossCarryforward" type="checkbox" class="border" ${scenario.allowLossCarryforward ? 'checked' : ''} />
+            Allow BV loss carryforward
+          </label>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <label class="space-y-1">Partner debt to BV €
+              <input data-scenario="partnerDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.partnerDebtToBV}" />
+            </label>
+            <label class="space-y-1">Connected persons debt €
+              <input data-scenario="connectedPersonsDebtToBV" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.connectedPersonsDebtToBV}" />
+            </label>
+          </div>
         </section>
 
         <section class="space-y-2">
           <h3 class="font-semibold">Box 1 (optional)</h3>
-          <label class="text-xs flex items-center gap-2">
-            <input id="dgaSalaryEnabled" type="checkbox" class="border" ${scenario.dgaSalaryEnabled ? 'checked' : ''} /> Enable DGA salary (Box 1)
-          </label>
-          <div class="grid grid-cols-2 gap-2 text-xs">
-            <label class="space-y-1">Manual salary €
-              <input id="dgaSalaryAmount" type="number" class="border rounded px-2 py-1 w-full" value="${scenario.dgaSalaryAmount}" />
-            </label>
-            <button id="autoFillSalary" class="text-xs border rounded px-2 py-1 mt-5">Auto-fill gebruikelijk loon</button>
-          </div>
+          <div class="text-xs text-slate-500">Use Decision Timeline salary policy for year-by-year planning.</div>
           <label class="text-xs flex items-center gap-2">
             <input id="box1UseBrackets" type="checkbox" class="border" ${scenario.box1UseBrackets ? 'checked' : ''} /> Use bracket table (else effective rate)
-          </label>
-          <label class="text-xs flex items-center gap-2">
-            <input id="addNetIncome" type="checkbox" class="border" ${scenario.addNetIncomeToPrivateBank ? 'checked' : ''} /> Add net income to private bank
           </label>
         </section>
       `;
 
-      ui.scenarioEditor.querySelectorAll('[data-field]').forEach((input) => {
+      ui.scenarioEditor.querySelectorAll('[data-balance]').forEach((input) => {
         input.addEventListener('input', (event) => {
-          const field = event.target.dataset.field;
+          const field = event.target.dataset.balance;
           scenario.balances[field] = Number(event.target.value || 0);
+          scenario.balances.privateDebt = (scenario.balances.privateDebtBV || 0) + (scenario.balances.privateDebtOther || 0);
           saveProject();
           runSimulation();
         });
@@ -786,15 +1068,47 @@
       ui.scenarioEditor.querySelectorAll('[data-return]').forEach((input) => {
         input.addEventListener('input', (event) => {
           const field = event.target.dataset.return;
-          scenario.returns[field] = Number(event.target.value || 0) / 100;
+          const rawValue = Number(event.target.value || 0) / 100;
+          const clamped = applyReturnGuardrails(scenario, rawValue, field);
+          scenario.returns[field] = clamped;
+          saveProject();
+          runSimulation();
+          if (clamped !== rawValue) {
+            renderScenarioEditor(scenario);
+          }
+        });
+      });
+
+      ui.scenarioEditor.querySelectorAll('[data-mix]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          scenario.assetMix.equityShare = Number(event.target.value || 0) / 100;
+          saveProject();
+          runSimulation();
+          renderScenarioEditor(scenario);
+        });
+      });
+
+      ui.scenarioEditor.querySelectorAll('[data-toggle]').forEach((input) => {
+        input.addEventListener('change', (event) => {
+          const field = event.target.dataset.toggle;
+          scenario[field] = event.target.checked;
           saveProject();
           runSimulation();
         });
       });
 
-      ui.scenarioEditor.querySelectorAll('.drawdownMode').forEach((btn) => {
+      ui.scenarioEditor.querySelectorAll('[data-scenario]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          const field = event.target.dataset.scenario;
+          scenario[field] = Number(event.target.value || 0);
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      ui.scenarioEditor.querySelectorAll('.timelineMode').forEach((btn) => {
         btn.addEventListener('click', () => {
-          scenario.drawdownMode = btn.dataset.mode;
+          scenario.decisionTimeline.mode = btn.dataset.timelineMode;
           renderScenarioEditor(scenario);
           saveProject();
           runSimulation();
@@ -807,22 +1121,8 @@
         runSimulation();
       });
 
-      ui.scenarioEditor.querySelector('#dgaSalaryEnabled').addEventListener('change', (event) => {
-        scenario.dgaSalaryEnabled = event.target.checked;
-        saveProject();
-        runSimulation();
-      });
-
-      ui.scenarioEditor.querySelector('#dgaSalaryAmount').addEventListener('input', (event) => {
-        scenario.dgaSalaryAmount = Number(event.target.value || 0);
-        saveProject();
-        runSimulation();
-      });
-
-      ui.scenarioEditor.querySelector('#autoFillSalary').addEventListener('click', () => {
-        const params = getTaxParamsForYear(state.globals.startYear);
-        scenario.dgaSalaryAmount = params.dgaSalaryDefault || 0;
-        renderScenarioEditor(scenario);
+      ui.scenarioEditor.querySelector('#allowLossCarryforward').addEventListener('change', (event) => {
+        scenario.allowLossCarryforward = event.target.checked;
         saveProject();
         runSimulation();
       });
@@ -833,14 +1133,369 @@
         runSimulation();
       });
 
-      ui.scenarioEditor.querySelector('#addNetIncome').addEventListener('change', (event) => {
-        scenario.addNetIncomeToPrivateBank = event.target.checked;
-        saveProject();
-        runSimulation();
+      renderLoanList(scenario);
+      renderDecisionTimelineEditor(scenario);
+    }
+
+    function renderDecisionTimelineEditor(scenario) {
+      const container = ui.scenarioEditor.querySelector('#decisionTimelineEditor');
+      if (!container) return;
+      const timeline = scenario.decisionTimeline;
+      if (timeline.mode === 'policy') {
+        container.innerHTML = `
+          <div class="grid grid-cols-2 gap-2">
+            <label class="space-y-1">Spending need gross €
+              <input data-policy="spendingNeedGross" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.spendingNeedGross}" />
+            </label>
+            <label class="space-y-1">Auto-rebalance sources
+              <input data-policy="autoRebalance" type="checkbox" class="border ml-2" ${timeline.policy.autoRebalance ? 'checked' : ''} />
+            </label>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">Drawdown source split (%)</div>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="space-y-1">Private bank
+                <input data-policy-split="privateBank" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateBank * 100}" />
+              </label>
+              <label class="space-y-1">Private other
+                <input data-policy-split="privateOther" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.privateOther * 100}" />
+              </label>
+              <label class="space-y-1">BV dividend
+                <input data-policy-split="bvDividend" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvDividend * 100}" />
+              </label>
+              <label class="space-y-1">BV loan
+                <input data-policy-split="bvLoan" type="number" step="1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.drawdownSplit.bvLoan * 100}" />
+              </label>
+            </div>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">Dividend policy</div>
+            <select data-policy="dividendPolicy" class="border rounded px-2 py-1 w-full">
+              <option value="manual" ${timeline.policy.dividendPolicy === 'manual' ? 'selected' : ''}>Manual / from split</option>
+              <option value="lowBracket" ${timeline.policy.dividendPolicy === 'lowBracket' ? 'selected' : ''}>Pay up to Box 2 low bracket</option>
+              <option value="smooth" ${timeline.policy.dividendPolicy === 'smooth' ? 'selected' : ''}>Smooth dividends</option>
+              <option value="none" ${timeline.policy.dividendPolicy === 'none' ? 'selected' : ''}>No dividends</option>
+            </select>
+            <label class="space-y-1">Smooth dividend target gross €
+              <input data-policy="smoothDividendTarget" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.smoothDividendTarget}" />
+            </label>
+            <label class="space-y-1">Target net dividend €
+              <input data-policy="targetNetDividend" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.targetNetDividend}" />
+            </label>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">DGA salary</div>
+            <label class="flex items-center gap-2">
+              <input data-policy-salary="enabled" type="checkbox" class="border" ${timeline.policy.salary.enabled ? 'checked' : ''} />
+              Enable DGA salary (Box 1)
+            </label>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="space-y-1">Base gross €
+                <input data-policy-salary="baseGross" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.salary.baseGross}" />
+              </label>
+              <button id="autoFillSalary" class="text-xs border rounded px-2 py-1 mt-5">Auto-fill gebruikelijk loon</button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="space-y-1">Salary growth %
+                <input data-policy-salary="growthRate" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.salary.growthRate * 100}" />
+              </label>
+              <label class="space-y-1">Growth type
+                <select data-policy-salary="growthType" class="border rounded px-2 py-1 w-full">
+                  <option value="inflation" ${timeline.policy.salary.growthType === 'inflation' ? 'selected' : ''}>Inflation-linked</option>
+                  <option value="custom" ${timeline.policy.salary.growthType === 'custom' ? 'selected' : ''}>Custom</option>
+                </select>
+              </label>
+            </div>
+            <label class="flex items-center gap-2">
+              <input data-policy-salary="netToPrivateBank" type="checkbox" class="border" ${timeline.policy.salary.netToPrivateBank ? 'checked' : ''} />
+              Net salary saved into private bank
+            </label>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">Loan policy (BV ↔ Private)</div>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="space-y-1">New loan to private €
+                <input data-policy-loan="newLoan" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.loanPolicy.newLoan}" />
+              </label>
+              <label class="space-y-1">Principal repayment €
+                <input data-policy-loan="repayment" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.loanPolicy.repayment}" />
+              </label>
+              <label class="space-y-1">Interest rate %
+                <input data-policy-loan="interestRate" type="number" step="0.1" class="border rounded px-2 py-1 w-full" value="${timeline.policy.loanPolicy.interestRate * 100}" />
+              </label>
+              <label class="space-y-1">Amortization
+                <select data-policy-loan="amortizationType" class="border rounded px-2 py-1 w-full">
+                  <option value="interestOnly" ${timeline.policy.loanPolicy.amortizationType === 'interestOnly' ? 'selected' : ''}>Interest only</option>
+                  <option value="linear" ${timeline.policy.loanPolicy.amortizationType === 'linear' ? 'selected' : ''}>Linear</option>
+                </select>
+              </label>
+            </div>
+            <label class="flex items-center gap-2">
+              <input data-policy-loan="avoidExcessBorrowing" type="checkbox" class="border" ${timeline.policy.loanPolicy.avoidExcessBorrowing ? 'checked' : ''} />
+              Avoid excessief lenen breach
+            </label>
+          </div>
+          <div class="border rounded p-2 space-y-2">
+            <div class="font-semibold text-xs">One-off transfers</div>
+            <label class="space-y-1">Private → BV contribution €
+              <input data-policy-transfer="privateToBV" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.transfers.privateToBV}" />
+            </label>
+            <label class="space-y-1">Contribution source
+              <select data-policy-transfer="privateToBVFrom" class="border rounded px-2 py-1 w-full">
+                <option value="bank" ${timeline.policy.transfers.privateToBVFrom === 'bank' ? 'selected' : ''}>Private bank</option>
+                <option value="other" ${timeline.policy.transfers.privateToBVFrom === 'other' ? 'selected' : ''}>Private other</option>
+              </select>
+            </label>
+          </div>
+          <label class="space-y-1">Manual cashflow adjustment (private bank) €
+            <input data-policy="manualCashflowAdjustment" type="number" class="border rounded px-2 py-1 w-full" value="${timeline.policy.manualCashflowAdjustment}" />
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button data-timeline-preset="lowBracketDividend" class="text-xs border rounded px-2 py-1">Dividend to low bracket each year</button>
+            <button data-timeline-preset="noDividend" class="text-xs border rounded px-2 py-1">No dividend</button>
+            <button data-timeline-preset="loanToThreshold" class="text-xs border rounded px-2 py-1">Loan to threshold then repay</button>
+            <button data-timeline-preset="privateOnly" class="text-xs border rounded px-2 py-1">Private-only drawdown</button>
+          </div>
+        `;
+
+        container.querySelectorAll('[data-policy]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.policy;
+            if (input.type === 'checkbox') {
+              timeline.policy[field] = input.checked;
+            } else {
+              timeline.policy[field] = Number(event.target.value || 0);
+              if (field === 'spendingNeedGross' || field === 'smoothDividendTarget' || field === 'targetNetDividend') {
+                timeline.policy[field] = Math.max(0, timeline.policy[field]);
+              }
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        container.querySelectorAll('[data-policy-split]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.policySplit;
+            timeline.policy.drawdownSplit[field] = Number(event.target.value || 0) / 100;
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        container.querySelectorAll('[data-policy-salary]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.policySalary;
+            if (input.type === 'checkbox') {
+              timeline.policy.salary[field] = input.checked;
+            } else if (field === 'growthType') {
+              timeline.policy.salary[field] = event.target.value;
+            } else {
+              timeline.policy.salary[field] = Number(event.target.value || 0);
+              if (field === 'growthRate') {
+                timeline.policy.salary[field] = timeline.policy.salary[field] / 100;
+              }
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        container.querySelectorAll('[data-policy-loan]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.policyLoan;
+            if (input.type === 'checkbox') {
+              timeline.policy.loanPolicy[field] = input.checked;
+            } else if (field === 'amortizationType') {
+              timeline.policy.loanPolicy[field] = event.target.value;
+            } else {
+              timeline.policy.loanPolicy[field] = Number(event.target.value || 0);
+              if (field === 'interestRate') {
+                timeline.policy.loanPolicy[field] = timeline.policy.loanPolicy[field] / 100;
+              }
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        container.querySelectorAll('[data-policy-transfer]').forEach((input) => {
+          input.addEventListener('input', (event) => {
+            const field = event.target.dataset.policyTransfer;
+            if (field === 'privateToBVFrom') {
+              timeline.policy.transfers[field] = event.target.value;
+            } else {
+              timeline.policy.transfers[field] = Number(event.target.value || 0);
+            }
+            saveProject();
+            runSimulation();
+          });
+        });
+
+        const autoSalary = container.querySelector('#autoFillSalary');
+        if (autoSalary) {
+          autoSalary.addEventListener('click', () => {
+            const params = getTaxParamsForYear(state.globals.startYear);
+            timeline.policy.salary.baseGross = params.dgaSalaryDefault || 0;
+            renderScenarioEditor(scenario);
+            saveProject();
+            runSimulation();
+          });
+        }
+
+        container.querySelectorAll('[data-timeline-preset]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            applyTimelinePreset(scenario, btn.dataset.timelinePreset);
+            renderScenarioEditor(scenario);
+            saveProject();
+            runSimulation();
+          });
+        });
+        return;
+      }
+
+      const years = Array.from({ length: state.globals.horizonYears }, (_, i) => state.globals.startYear + i);
+      const columnDefs = [
+        { key: 'spendingNeedGross', label: 'Spending €' },
+        { key: 'privateBankSell', label: 'Private bank €' },
+        { key: 'privateOtherSell', label: 'Private other €' },
+        { key: 'bvDividendGross', label: 'BV dividend gross €' },
+        { key: 'targetNetDividend', label: 'Target net dividend €' },
+        { key: 'bvNewLoanToPrivate', label: 'New BV loan €' },
+        { key: 'bvLoanRepaymentFromPrivate', label: 'Loan repayment €' },
+        { key: 'dgaSalaryGross', label: 'DGA salary gross €' },
+        { key: 'dgaSalaryEnabled', label: 'Salary on?', type: 'checkbox' },
+        { key: 'interestRate', label: 'Interest %' },
+        { key: 'privateToBVContribution', label: 'Private→BV €' },
+        { key: 'partnerDebtToBV', label: 'Partner debt €' },
+        { key: 'connectedPersonsDebtToBV', label: 'Connected debt €' },
+        { key: 'privateBankReturnOverride', label: 'Private bank %' },
+        { key: 'privateOtherReturnOverride', label: 'Private other %' },
+        { key: 'bvCashReturnOverride', label: 'BV cash %' },
+        { key: 'bvInvestmentsReturnOverride', label: 'BV inv. %' }
+      ];
+      const activeColumns = columnDefs.filter((col) => timeline.overrideColumns[col.key]);
+      const columnToggles = columnDefs.map((col) => `
+        <label class="flex items-center gap-1">
+          <input type="checkbox" data-override-col="${col.key}" class="border" ${timeline.overrideColumns[col.key] ? 'checked' : ''} />
+          ${col.label}
+        </label>
+      `).join('');
+      const header = activeColumns.map((col) => `<th class="px-2 py-1 whitespace-nowrap">${col.label}</th>`).join('');
+      const rows = years.map((year) => {
+        const data = timeline.overrides[year] || {};
+        const cells = activeColumns.map((col) => {
+          if (col.type === 'checkbox') {
+            return `
+              <td class="px-2 py-1 text-center">
+                <input type="checkbox" data-override-year="${year}" data-override-field="${col.key}" class="border" ${data[col.key] ? 'checked' : ''} />
+              </td>
+            `;
+          }
+          const value = data[col.key] ?? '';
+          return `
+            <td class="px-2 py-1">
+              <input type="number" step="${col.key.includes('Return') || col.key === 'interestRate' ? '0.1' : '1'}" class="border rounded px-2 py-1 w-24" data-override-year="${year}" data-override-field="${col.key}" value="${value}" />
+            </td>
+          `;
+        }).join('');
+        return `
+          <tr class="border-b">
+            <td class="sticky left-0 bg-white px-2 py-1 font-semibold">${year}</td>
+            ${cells}
+          </tr>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="space-y-2">
+          <div class="flex flex-wrap gap-2 text-[11px]">${columnToggles}</div>
+          <div class="border rounded overflow-auto max-h-64">
+            <table class="min-w-full text-[11px]">
+              <thead class="sticky top-0 bg-slate-100">
+                <tr>
+                  <th class="px-2 py-1 sticky left-0 bg-slate-100">Year</th>
+                  ${header}
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button data-override-action="clear" class="text-xs border rounded px-2 py-1">Clear overrides</button>
+            <button data-override-action="copyPolicy" class="text-xs border rounded px-2 py-1">Fill spending from policy</button>
+          </div>
+        </div>
+      `;
+
+      container.querySelectorAll('[data-override-col]').forEach((input) => {
+        input.addEventListener('change', (event) => {
+          const key = event.target.dataset.overrideCol;
+          timeline.overrideColumns[key] = event.target.checked;
+          renderDecisionTimelineEditor(scenario);
+          saveProject();
+        });
       });
 
-      renderLoanList(scenario);
-      renderDrawdownEditor(scenario);
+      container.querySelectorAll('[data-override-field]').forEach((input) => {
+        input.addEventListener('input', (event) => {
+          const year = event.target.dataset.overrideYear;
+          const field = event.target.dataset.overrideField;
+          timeline.overrides[year] = timeline.overrides[year] || {};
+          if (input.type === 'checkbox') {
+            timeline.overrides[year][field] = input.checked;
+          } else {
+            timeline.overrides[year][field] = Number(event.target.value || 0);
+          }
+          saveProject();
+          runSimulation();
+        });
+      });
+
+      container.querySelectorAll('[data-override-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.overrideAction === 'clear') {
+            timeline.overrides = {};
+          }
+          if (btn.dataset.overrideAction === 'copyPolicy') {
+            years.forEach((year) => {
+              timeline.overrides[year] = {
+                ...(timeline.overrides[year] || {}),
+                spendingNeedGross: timeline.policy.spendingNeedGross
+              };
+            });
+          }
+          renderDecisionTimelineEditor(scenario);
+          saveProject();
+          runSimulation();
+        });
+      });
+    }
+
+    function applyTimelinePreset(scenario, preset) {
+      const policy = scenario.decisionTimeline.policy;
+      if (preset === 'lowBracketDividend') {
+        policy.dividendPolicy = 'lowBracket';
+        policy.drawdownSplit = { privateBank: 0.3, privateOther: 0.2, bvDividend: 0.5, bvLoan: 0.0 };
+      }
+      if (preset === 'noDividend') {
+        policy.dividendPolicy = 'none';
+        policy.drawdownSplit = { privateBank: 0.6, privateOther: 0.4, bvDividend: 0.0, bvLoan: 0.0 };
+      }
+      if (preset === 'loanToThreshold') {
+        policy.loanPolicy.newLoan = Math.max(0, policy.spendingNeedGross * 0.5);
+        policy.loanPolicy.repayment = Math.max(0, policy.spendingNeedGross * 0.2);
+        policy.loanPolicy.avoidExcessBorrowing = true;
+        policy.drawdownSplit = { privateBank: 0.3, privateOther: 0.2, bvDividend: 0.2, bvLoan: 0.3 };
+      }
+      if (preset === 'privateOnly') {
+        policy.dividendPolicy = 'none';
+        policy.loanPolicy.newLoan = 0;
+        policy.loanPolicy.repayment = 0;
+        policy.drawdownSplit = { privateBank: 0.7, privateOther: 0.3, bvDividend: 0.0, bvLoan: 0.0 };
+      }
     }
 
     function renderLoanList(scenario) {
@@ -1125,9 +1780,11 @@
         card.innerHTML = `
           <div class="font-semibold">${item.name}</div>
           <div class="text-slate-500">${item.snapshot ? 'Snapshot' : 'Scenario'} • ${new Date(item.timestamp).toLocaleString()}</div>
+          ${item.description ? `<div class="text-slate-600">${item.description}</div>` : ''}
+          ${item.assumptions ? `<div class="text-slate-500">Assumptions: ${item.assumptions}</div>` : ''}
           <div class="flex flex-wrap gap-2">
             <button data-action="load" class="border rounded px-2 py-1">Load</button>
-            <button data-action="overlay" class="border rounded px-2 py-1">Overlay</button>
+            <button data-action="overlay" class="border rounded px-2 py-1">${item.overlay ? 'Unpin' : 'Pin to compare'}</button>
             <button data-action="delete" class="border rounded px-2 py-1 text-rose-600">Delete</button>
           </div>
         `;
@@ -1202,9 +1859,24 @@
       };
     }
 
-    function computeCIT(year, bvState, params) {
+    function computeCIT(year, bvState, params, lossCarryforward = 0, allowLossCarryforward = false) {
       const bvPreTaxProfit = bvState.returns + bvState.interestReceived - bvState.interestPaid - (bvState.optionalCosts || 0);
-      const taxable = Math.max(0, bvPreTaxProfit);
+      let taxable = bvPreTaxProfit;
+      let appliedCarryforward = 0;
+      let lossCarryforwardEnd = lossCarryforward;
+      if (allowLossCarryforward) {
+        if (bvPreTaxProfit < 0) {
+          lossCarryforwardEnd = lossCarryforward + Math.abs(bvPreTaxProfit);
+          taxable = 0;
+        } else if (lossCarryforward > 0) {
+          appliedCarryforward = Math.min(lossCarryforward, bvPreTaxProfit);
+          taxable = bvPreTaxProfit - appliedCarryforward;
+          lossCarryforwardEnd = lossCarryforward - appliedCarryforward;
+        }
+      } else {
+        taxable = Math.max(0, bvPreTaxProfit);
+        lossCarryforwardEnd = 0;
+      }
       let remaining = taxable;
       let lastUpTo = 0;
       let cit = 0;
@@ -1219,7 +1891,7 @@
         if (remaining <= 0) break;
       }
       const bvAfterTaxProfit = bvPreTaxProfit - cit;
-      return { bvPreTaxProfit, cit, bvAfterTaxProfit };
+      return { bvPreTaxProfit, cit, bvAfterTaxProfit, appliedCarryforward, lossCarryforwardEnd };
     }
 
     function computeDividendTaxes(year, grossDividend, params, numTaxpayers, scenarioToggle) {
@@ -1232,9 +1904,11 @@
       const box2TaxOnDividendsGross = bracketedTax(grossDividend, threshold, params.box2Brackets);
       const box2WithholdingCredit = Math.min(withholdingTax, box2TaxOnDividendsGross);
       const box2TaxOnDividendsDue = Math.max(0, box2TaxOnDividendsGross - box2WithholdingCredit);
+      const netCashToPrivate = grossDividend - withholdingTax - box2TaxOnDividendsDue;
       return {
         withholdingTax,
         netDividendToPrivate,
+        netCashToPrivate,
         box2TaxOnDividendsGross,
         box2WithholdingCredit,
         box2TaxOnDividendsDue,
@@ -1242,7 +1916,85 @@
       };
     }
 
-    function computeExcessBorrowing(year, scenario, loanStates, params, box2ThresholdUsed, box2Brackets, thresholdExtraState) {
+    function computeGrossDividendForNet(targetNet, params, numTaxpayers, scenarioToggle) {
+      if (targetNet <= 0) return 0;
+      let low = 0;
+      let high = targetNet * 2;
+      for (let i = 0; i < 12; i += 1) {
+        const mid = (low + high) / 2;
+        const taxes = computeDividendTaxes(state.globals.startYear, mid, params, numTaxpayers, scenarioToggle);
+        if (taxes.netDividendToPrivate >= targetNet) {
+          high = mid;
+        } else {
+          low = mid;
+        }
+      }
+      return high;
+    }
+
+    function resolveDecisionForYear(scenario, year, yearIndex, params) {
+      const policy = scenario.decisionTimeline.policy;
+      const override = scenario.decisionTimeline.overrides[year] || {};
+      const spendingNeedGross = override.spendingNeedGross ?? policy.spendingNeedGross ?? 0;
+      const split = policy.drawdownSplit || {};
+      const baseSources = {
+        privateBankSell: spendingNeedGross * (split.privateBank || 0),
+        privateOtherSell: spendingNeedGross * (split.privateOther || 0),
+        bvDividendGross: spendingNeedGross * (split.bvDividend || 0),
+        bvNewLoanToPrivate: spendingNeedGross * (split.bvLoan || 0)
+      };
+
+      let bvDividendGross = override.bvDividendGross ?? baseSources.bvDividendGross ?? 0;
+      if (policy.dividendPolicy === 'lowBracket') {
+        const baseThreshold = params.box2LowBracketThreshold || 0;
+        const threshold = (scenario.box2UseDoubleLowBracket && state.globals.numTaxpayers === 2) ? baseThreshold * 2 : baseThreshold;
+        bvDividendGross = Math.max(bvDividendGross, threshold);
+      }
+      if (policy.dividendPolicy === 'smooth') {
+        bvDividendGross = Math.max(bvDividendGross, policy.smoothDividendTarget || 0);
+      }
+      if (policy.dividendPolicy === 'none' && override.bvDividendGross == null) {
+        bvDividendGross = 0;
+      }
+      const targetNetDividend = override.targetNetDividend ?? policy.targetNetDividend ?? 0;
+      if (targetNetDividend > 0) {
+        bvDividendGross = computeGrossDividendForNet(targetNetDividend, params, state.globals.numTaxpayers, scenario.box2UseDoubleLowBracket);
+      }
+
+      const salaryEnabled = override.dgaSalaryEnabled ?? policy.salary.enabled ?? scenario.dgaSalaryEnabled ?? false;
+      const salaryBase = policy.salary.baseGross || scenario.dgaSalaryAmount || params.dgaSalaryDefault || 0;
+      const growthRate = policy.salary.growthType === 'inflation' ? state.globals.inflation : policy.salary.growthRate;
+      const salaryGross = override.dgaSalaryGross ?? (salaryBase * Math.pow(1 + (growthRate || 0), yearIndex));
+
+      return {
+        spendingNeedGross,
+        autoRebalance: policy.autoRebalance ?? true,
+        privateBankSell: override.privateBankSell ?? baseSources.privateBankSell ?? 0,
+        privateOtherSell: override.privateOtherSell ?? baseSources.privateOtherSell ?? 0,
+        bvDividendGross,
+        bvNewLoanToPrivate: override.bvNewLoanToPrivate ?? baseSources.bvNewLoanToPrivate ?? policy.loanPolicy.newLoan ?? 0,
+        bvLoanRepaymentFromPrivate: override.bvLoanRepaymentFromPrivate ?? policy.loanPolicy.repayment ?? 0,
+        interestRate: (override.interestRate != null ? override.interestRate / 100 : policy.loanPolicy.interestRate) || 0,
+        avoidExcessBorrowing: policy.loanPolicy.avoidExcessBorrowing ?? true,
+        dgaSalaryEnabled: salaryEnabled,
+        dgaSalaryGross: salaryGross,
+        salaryNetToPrivateBank: policy.salary.netToPrivateBank ?? scenario.addNetIncomeToPrivateBank ?? false,
+        privateToBVContribution: override.privateToBVContribution ?? policy.transfers.privateToBV ?? 0,
+        privateToBVFrom: override.privateToBVFrom ?? policy.transfers.privateToBVFrom ?? 'bank',
+        manualCashflowAdjustment: policy.manualCashflowAdjustment ?? 0,
+        partnerDebtToBV: override.partnerDebtToBV ?? scenario.partnerDebtToBV ?? 0,
+        connectedPersonsDebtToBV: override.connectedPersonsDebtToBV ?? scenario.connectedPersonsDebtToBV ?? 0,
+        returnOverrides: {
+          privateBank: override.privateBankReturnOverride != null ? (override.privateBankReturnOverride / 100) : null,
+          privateOther: override.privateOtherReturnOverride != null ? (override.privateOtherReturnOverride / 100) : null,
+          bvCash: override.bvCashReturnOverride != null ? (override.bvCashReturnOverride / 100) : null,
+          bvInvestments: override.bvInvestmentsReturnOverride != null ? (override.bvInvestmentsReturnOverride / 100) : null
+        },
+        targetNetDividend
+      };
+    }
+
+    function computeExcessBorrowing(year, scenario, loanStates, params, box2ThresholdUsed, box2Brackets, thresholdExtraState, extras = {}) {
       const countedLoans = loanStates.filter((loan) => loan.direction === 'BV->Private' && loan.startYear <= year);
       let debtSum = 0;
       const breakdown = [];
@@ -1254,14 +2006,19 @@
         debtSum += loan.balance;
         breakdown.push({ id: loan.id, amount: loan.balance, note: loan.loanType });
       }
+      if (extras.policyLoanBalance) {
+        debtSum += extras.policyLoanBalance;
+        breakdown.push({ id: 'policyLoan', amount: extras.policyLoanBalance, note: 'Policy loan' });
+      }
       if (params.includePartnerDebtInDebtSum) {
-        debtSum += scenario.partnerDebtToBV || 0;
+        debtSum += extras.partnerDebtToBV ?? scenario.partnerDebtToBV ?? 0;
       }
       if (params.connectedPersonsDebtIncluded) {
-        debtSum += scenario.connectedPersonsDebtToBV || 0;
+        debtSum += extras.connectedPersonsDebtToBV ?? scenario.connectedPersonsDebtToBV ?? 0;
       }
 
       const currentThreshold = params.excessBorrowingBaseThreshold + thresholdExtraState.value;
+      const headroom = currentThreshold - debtSum;
       let excessAmount = 0;
       let box2TaxOnExcessBorrowing = 0;
       if (debtSum > currentThreshold) {
@@ -1276,6 +2033,7 @@
         debtSum,
         breakdown,
         currentThreshold,
+        headroom,
         excessAmount,
         box2TaxOnExcessBorrowing
       };
@@ -1306,7 +2064,8 @@
       const numTaxpayers = state.globals.numTaxpayers;
       let privateBank = scenario.balances.privateBank;
       let privateOther = scenario.balances.privateOther;
-      let privateDebt = scenario.balances.privateDebt;
+      let privateDebtOther = scenario.balances.privateDebtOther || 0;
+      let policyLoanBalance = scenario.balances.privateDebtBV || 0;
       let bvCash = scenario.balances.bvCash;
       let bvInvestments = scenario.balances.bvInvestments;
       const loanStates = scenario.loans.map((loan) => ({
@@ -1314,18 +2073,36 @@
         balance: loan.principal
       }));
       const thresholdExtraState = { value: 0 };
+      let lossCarryforward = 0;
 
       const perYear = [];
 
-      years.forEach((year) => {
+      years.forEach((year, index) => {
         const params = getTaxParamsForYear(year);
-        const startBalances = { privateBank, privateOther, privateDebt, bvCash, bvInvestments };
+        const decision = resolveDecisionForYear(scenario, year, index, params);
+        const startLoanDebtTotal = loanStates
+          .filter((loan) => loan.direction === 'BV->Private' && loan.startYear <= year)
+          .reduce((sum, loan) => sum + loan.balance, 0);
+        const startBalances = {
+          privateBank,
+          privateOther,
+          privateDebt: privateDebtOther + policyLoanBalance + startLoanDebtTotal,
+          bvCash,
+          bvInvestments
+        };
+
+        const appliedReturns = {
+          privateBank: applyReturnGuardrails(scenario, decision.returnOverrides.privateBank ?? scenario.returns.privateBank),
+          privateOther: applyReturnGuardrails(scenario, decision.returnOverrides.privateOther ?? computePrivateOtherReturn(scenario)),
+          bvCash: applyReturnGuardrails(scenario, decision.returnOverrides.bvCash ?? scenario.returns.bvCash),
+          bvInvestments: applyReturnGuardrails(scenario, decision.returnOverrides.bvInvestments ?? scenario.returns.bvInvestments)
+        };
 
         const returns = {
-          privateBank: privateBank * scenario.returns.privateBank,
-          privateOther: privateOther * scenario.returns.privateOther,
-          bvCash: bvCash * scenario.returns.bvCash,
-          bvInvestments: bvInvestments * scenario.returns.bvInvestments
+          privateBank: privateBank * appliedReturns.privateBank,
+          privateOther: privateOther * appliedReturns.privateOther,
+          bvCash: bvCash * appliedReturns.bvCash,
+          bvInvestments: bvInvestments * appliedReturns.bvInvestments
         };
 
         privateBank += returns.privateBank;
@@ -1361,34 +2138,148 @@
           }
         });
 
-        const drawdown = getDrawdownForYear(scenario, year);
         const warnings = [];
-        const drawdownResult = applyDrawdown(drawdown, {
-          privateBank,
-          privateOther,
-          bvCash,
-          privateDebt
-        }, scenario.drawdownMode === 'simple' ? scenario.drawdownSimple.autoRebalance : false, warnings);
-        privateBank = drawdownResult.balances.privateBank;
-        privateOther = drawdownResult.balances.privateOther;
-        bvCash = drawdownResult.balances.bvCash;
-        privateDebt = drawdownResult.balances.privateDebt;
+        const decisionSummary = { ...decision, actual: {} };
 
-        const dividendTaxes = computeDividendTaxes(year, drawdownResult.actual.bvDividend, params, numTaxpayers, scenario.box2UseDoubleLowBracket);
-        bvCash -= drawdownResult.actual.bvDividend;
+        if (decision.privateToBVContribution > 0) {
+          if (decision.privateToBVFrom === 'other') {
+            privateOther = Math.max(0, privateOther - decision.privateToBVContribution);
+          } else {
+            privateBank = Math.max(0, privateBank - decision.privateToBVContribution);
+          }
+          bvCash += decision.privateToBVContribution;
+        }
+
+        let remainingSpending = decision.spendingNeedGross;
+        if (decision.privateBankSell > 0) {
+          const actual = Math.min(privateBank, decision.privateBankSell);
+          if (actual < decision.privateBankSell) {
+            warnings.push('Private bank sell capped by available balance.');
+          }
+          privateBank -= actual;
+          remainingSpending -= actual;
+          decisionSummary.actual.privateBankSell = actual;
+        }
+        if (decision.privateOtherSell > 0) {
+          const actual = Math.min(privateOther, decision.privateOtherSell);
+          if (actual < decision.privateOtherSell) {
+            warnings.push('Private other sell capped by available balance.');
+          }
+          privateOther -= actual;
+          remainingSpending -= actual;
+          decisionSummary.actual.privateOtherSell = actual;
+        }
+
+        const debtPreview = computeExcessBorrowing(
+          year,
+          scenario,
+          loanStates,
+          params,
+          0,
+          params.box2Brackets,
+          thresholdExtraState,
+          {
+            policyLoanBalance,
+            partnerDebtToBV: decision.partnerDebtToBV,
+            connectedPersonsDebtToBV: decision.connectedPersonsDebtToBV
+          }
+        );
+        let newLoanAmount = decision.bvNewLoanToPrivate;
+        if (decision.avoidExcessBorrowing && debtPreview.headroom < newLoanAmount) {
+          newLoanAmount = Math.max(0, debtPreview.headroom);
+          warnings.push('New BV loan reduced to avoid excessief lenen breach.');
+        }
+
+        if (newLoanAmount > 0) {
+          if (bvCash < newLoanAmount) {
+            warnings.push('BV cash insufficient for requested new loan.');
+            newLoanAmount = Math.max(0, bvCash);
+          }
+          bvCash -= newLoanAmount;
+          privateBank += newLoanAmount;
+          policyLoanBalance += newLoanAmount;
+          loanFlow.newLoans += newLoanAmount;
+        }
+        decisionSummary.actual.bvNewLoanToPrivate = newLoanAmount;
+
+        let repayment = decision.bvLoanRepaymentFromPrivate;
+        if (repayment > 0) {
+          repayment = Math.min(repayment, policyLoanBalance, privateBank);
+          if (repayment < decision.bvLoanRepaymentFromPrivate) {
+            warnings.push('Loan repayment capped by available private bank or loan balance.');
+          }
+          privateBank -= repayment;
+          bvCash += repayment;
+          policyLoanBalance -= repayment;
+          loanFlow.repayments += repayment;
+        }
+        decisionSummary.actual.bvLoanRepaymentFromPrivate = repayment;
+
+        const policyLoanInterest = policyLoanBalance * decision.interestRate;
+        if (policyLoanInterest > 0) {
+          if (privateBank < policyLoanInterest) {
+            warnings.push('Private bank insufficient to pay loan interest.');
+          }
+          privateBank -= policyLoanInterest;
+          bvCash += policyLoanInterest;
+          loanFlow.interestReceived += policyLoanInterest;
+        }
+
+        const dividendGross = Math.max(0, decision.bvDividendGross);
+        let payableDividend = 0;
+        if (dividendGross > 0) {
+          if (bvCash < dividendGross) {
+            warnings.push('BV cash insufficient for requested dividend.');
+          }
+          payableDividend = Math.min(bvCash, dividendGross);
+          bvCash -= payableDividend;
+        }
+        const dividendTaxes = computeDividendTaxes(year, payableDividend, params, numTaxpayers, scenario.box2UseDoubleLowBracket);
         privateBank += dividendTaxes.netDividendToPrivate;
+        if (dividendTaxes.box2TaxOnDividendsDue > 0) {
+          if (privateBank < dividendTaxes.box2TaxOnDividendsDue) {
+            warnings.push('Private bank insufficient to settle Box 2 dividend tax.');
+          }
+          privateBank = Math.max(0, privateBank - dividendTaxes.box2TaxOnDividendsDue);
+        }
+        decisionSummary.actual.bvDividendGross = payableDividend;
 
+        let spendingNeedGross = Math.max(0, remainingSpending);
+        if (spendingNeedGross > 0) {
+          if (decision.autoRebalance && privateBank < spendingNeedGross) {
+            const needed = spendingNeedGross - privateBank;
+            const rebalance = Math.min(needed, privateOther);
+            privateOther -= rebalance;
+            privateBank += rebalance;
+          }
+          if (privateBank < spendingNeedGross) {
+            warnings.push('Insufficient private bank to cover spending need.');
+            spendingNeedGross = privateBank;
+          }
+          privateBank -= spendingNeedGross;
+        }
+        decisionSummary.actual.spendingNeedGross = spendingNeedGross;
+
+        if (decision.manualCashflowAdjustment) {
+          privateBank += decision.manualCashflowAdjustment;
+        }
+
+        const loanDebtTotal = loanStates
+          .filter((loan) => loan.direction === 'BV->Private' && loan.startYear <= year)
+          .reduce((sum, loan) => sum + loan.balance, 0);
+        const totalPrivateDebt = privateDebtOther + policyLoanBalance + loanDebtTotal;
         const box3 = computeBox3(year, {
           privateBank,
           privateOther,
-          privateDebt
+          privateDebt: totalPrivateDebt
         }, params, numTaxpayers);
 
         const cit = computeCIT(year, {
           returns: returns.bvCash + returns.bvInvestments,
           interestReceived: loanFlow.interestReceived,
           interestPaid: loanFlow.interestPaid
-        }, params);
+        }, params, lossCarryforward, scenario.allowLossCarryforward);
+        lossCarryforward = cit.lossCarryforwardEnd;
 
         const excess = computeExcessBorrowing(
           year,
@@ -1397,7 +2288,12 @@
           params,
           dividendTaxes.thresholdUsed,
           params.box2Brackets,
-          thresholdExtraState
+          thresholdExtraState,
+          {
+            policyLoanBalance,
+            partnerDebtToBV: decision.partnerDebtToBV,
+            connectedPersonsDebtToBV: decision.connectedPersonsDebtToBV
+          }
         );
 
         if (params.allowThresholdCarryMechanism) {
@@ -1406,33 +2302,37 @@
 
         let box1Tax = 0;
         let box1Income = 0;
-        if (scenario.dgaSalaryEnabled) {
-          box1Income = scenario.dgaSalaryAmount || params.dgaSalaryDefault;
+        if (decision.dgaSalaryEnabled) {
+          box1Income = decision.dgaSalaryGross || params.dgaSalaryDefault;
           if (scenario.box1UseBrackets) {
             box1Tax = bracketedTax(box1Income, 0, params.box1Brackets);
           } else {
             box1Tax = box1Income * params.box1EffectiveRate;
           }
-          if (scenario.addNetIncomeToPrivateBank) {
+          if (decision.salaryNetToPrivateBank) {
             privateBank += (box1Income - box1Tax);
           }
         }
 
         const totalTax = box3.box3Tax + cit.cit + dividendTaxes.withholdingTax + dividendTaxes.box2TaxOnDividendsDue + excess.box2TaxOnExcessBorrowing + box1Tax;
-        const endBalances = { privateBank, privateOther, privateDebt, bvCash, bvInvestments };
+        const endBalances = { privateBank, privateOther, privateDebt: totalPrivateDebt, bvCash, bvInvestments };
 
         perYear.push({
           year,
           startBalances,
           returns,
+          appliedReturns,
           loanFlow,
-          drawdown: drawdownResult,
+          decision: decisionSummary,
+          spendingNeedGross,
           box3,
           cit,
           dividendTaxes,
           excessBorrowing: excess,
+          thresholdExtra: thresholdExtraState.value,
           box1Tax,
           box1Income,
+          netCashToPrivate: dividendTaxes.netCashToPrivate,
           totalTax,
           endBalances,
           warnings
@@ -1515,17 +2415,30 @@
           acc.box1 += year.box1Tax;
           return acc;
         }, { totalTax: 0, box3: 0, cit: 0, withholding: 0, box2Div: 0, box2Excess: 0, box1: 0 });
+        const first = result.perYear[0];
         const last = result.perYear[result.perYear.length - 1];
+        const startWealth = first.startBalances.privateBank + first.startBalances.privateOther + first.startBalances.bvCash + first.startBalances.bvInvestments - first.startBalances.privateDebt;
         const endWealth = last.endBalances.privateBank + last.endBalances.privateOther + last.endBalances.bvCash + last.endBalances.bvInvestments - last.endBalances.privateDebt;
+        const yearsCount = Math.max(1, years.length);
+        const cagr = startWealth > 0 ? Math.pow(endWealth / startWealth, 1 / yearsCount) - 1 : 0;
         const card = document.createElement('div');
         card.className = 'bg-white border rounded p-3 space-y-1';
         card.innerHTML = `
-          <div class="font-semibold">${result.scenario.name}</div>
+          <div class="flex items-center justify-between">
+            <div class="font-semibold">${result.scenario.name}</div>
+            ${cagr > 0.5 ? '<button data-action="sanity" class="text-[10px] border rounded px-2 py-0.5 text-amber-700 border-amber-300 bg-amber-50">Assumption sanity</button>' : ''}
+          </div>
           <div class="text-xs">Total taxes: <span class="font-semibold">${formatCurrency(totals.totalTax)}</span></div>
           <div class="text-xs">Avg annual taxes: <span class="font-semibold">${formatCurrency(totals.totalTax / years.length)}</span></div>
           <div class="text-xs">End wealth total: <span class="font-semibold">${formatCurrency(endWealth)}</span></div>
           <div class="text-[11px] text-slate-500">Box 3 ${formatCurrency(totals.box3)} • CIT ${formatCurrency(totals.cit)} • Withholding ${formatCurrency(totals.withholding)} • Box 2 (div) ${formatCurrency(totals.box2Div)} • Box 2 (excess) ${formatCurrency(totals.box2Excess)} • Box 1 ${formatCurrency(totals.box1)}</div>
         `;
+        const sanityBtn = card.querySelector('[data-action="sanity"]');
+        if (sanityBtn) {
+          sanityBtn.addEventListener('click', () => {
+            alert('Wealth CAGR exceeds 50%. Double-check return assumptions, dividend policies, and timeline overrides for realism.');
+          });
+        }
         ui.kpiCards.appendChild(card);
       });
     }
@@ -1534,46 +2447,95 @@
     function renderChart(results, years) {
       const ctx = document.getElementById('taxChart');
       const datasets = [];
-      results.forEach((result, index) => {
-        const color = `hsl(${(index * 80) % 360}, 70%, 45%)`;
-        datasets.push({
-          label: `${result.scenario.name} (Wealth)`,
-          data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
-          yAxisID: 'y',
-          borderColor: color,
-          backgroundColor: color,
-          tension: 0.2
+      if (state.globals.chartMode === 'wealth') {
+        results.forEach((result, index) => {
+          const color = `hsl(${(index * 80) % 360}, 70%, 45%)`;
+          datasets.push({
+            label: `${result.scenario.name} (Wealth)`,
+            data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
+            yAxisID: 'y',
+            borderColor: color,
+            backgroundColor: color,
+            tension: 0.2
+          });
+          datasets.push({
+            label: `${result.scenario.name} (Tax)`,
+            data: result.perYear.map((year) => year.totalTax),
+            yAxisID: 'y1',
+            borderColor: color,
+            backgroundColor: color,
+            borderDash: [4, 4],
+            tension: 0.2
+          });
         });
-        datasets.push({
-          label: `${result.scenario.name} (Tax)`,
-          data: result.perYear.map((year) => year.totalTax),
-          yAxisID: 'y1',
-          borderColor: color,
-          backgroundColor: color,
-          borderDash: [4, 4],
-          tension: 0.2
+      } else {
+        results.forEach((result, index) => {
+          const color = `hsl(${(index * 80) % 360}, 65%, 45%)`;
+          datasets.push({
+            label: `${result.scenario.name} (Debt)`,
+            data: result.perYear.map((year) => year.excessBorrowing.debtSum),
+            yAxisID: 'y',
+            borderColor: color,
+            backgroundColor: color,
+            tension: 0.2
+          });
+          datasets.push({
+            label: `${result.scenario.name} (Threshold)`,
+            data: result.perYear.map((year) => year.excessBorrowing.currentThreshold),
+            yAxisID: 'y',
+            borderColor: color,
+            backgroundColor: color,
+            borderDash: [6, 4],
+            tension: 0.2
+          });
+          datasets.push({
+            label: `${result.scenario.name} (Dividend gross)`,
+            data: result.perYear.map((year) => year.decision?.actual?.bvDividendGross ?? year.decision?.bvDividendGross ?? 0),
+            type: 'bar',
+            yAxisID: 'y',
+            backgroundColor: `${color}55`
+          });
         });
-      });
+      }
 
       state.vault.filter((item) => item.overlay).forEach((item, idx) => {
         const result = simulateScenario(item.scenario, years);
         const color = `hsl(${(idx * 90 + 40) % 360}, 60%, 55%)`;
-        datasets.push({
-          label: `${item.name} (Vault Wealth)`,
-          data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
-          yAxisID: 'y',
-          borderColor: color,
-          borderDash: [8, 4],
-          tension: 0.2
-        });
-        datasets.push({
-          label: `${item.name} (Vault Tax)`,
-          data: result.perYear.map((year) => year.totalTax),
-          yAxisID: 'y1',
-          borderColor: color,
-          borderDash: [2, 4],
-          tension: 0.2
-        });
+        if (state.globals.chartMode === 'wealth') {
+          datasets.push({
+            label: `${item.name} (Vault Wealth)`,
+            data: result.perYear.map((year) => year.endBalances.privateBank + year.endBalances.privateOther + year.endBalances.bvCash + year.endBalances.bvInvestments - year.endBalances.privateDebt),
+            yAxisID: 'y',
+            borderColor: color,
+            borderDash: [8, 4],
+            tension: 0.2
+          });
+          datasets.push({
+            label: `${item.name} (Vault Tax)`,
+            data: result.perYear.map((year) => year.totalTax),
+            yAxisID: 'y1',
+            borderColor: color,
+            borderDash: [2, 4],
+            tension: 0.2
+          });
+        } else {
+          datasets.push({
+            label: `${item.name} (Vault Debt)`,
+            data: result.perYear.map((year) => year.excessBorrowing.debtSum),
+            yAxisID: 'y',
+            borderColor: color,
+            borderDash: [8, 4],
+            tension: 0.2
+          });
+          datasets.push({
+            label: `${item.name} (Vault Threshold)`,
+            data: result.perYear.map((year) => year.excessBorrowing.currentThreshold),
+            yAxisID: 'y',
+            borderColor: color,
+            borderDash: [2, 4],
+            tension: 0.2
+          });
+        }
       });
 
       if (chartInstance) chartInstance.destroy();
@@ -1589,13 +2551,13 @@
           scales: {
             y: {
               position: 'left',
-              title: { display: true, text: 'Wealth (€)' }
+              title: { display: true, text: state.globals.chartMode === 'wealth' ? 'Wealth (€)' : 'Debt & Threshold (€)' }
             },
-            y1: {
+            y1: state.globals.chartMode === 'wealth' ? {
               position: 'right',
               title: { display: true, text: 'Taxes (€)' },
               grid: { drawOnChartArea: false }
-            }
+            } : undefined
           }
         }
       });
@@ -1607,12 +2569,26 @@
       results.forEach((result) => {
         headers.push(`${result.scenario.name} Total Tax`);
         if (showBreakdown) {
+          headers.push(`${result.scenario.name} Spending Gross`);
+          headers.push(`${result.scenario.name} Net Cash to Private`);
+          headers.push(`${result.scenario.name} Dividend Gross`);
+          headers.push(`${result.scenario.name} Dividend Withholding`);
+          headers.push(`${result.scenario.name} Box 2 Dividend Due`);
+          headers.push(`${result.scenario.name} Counted Debt`);
+          headers.push(`${result.scenario.name} Headroom`);
+          headers.push(`${result.scenario.name} Threshold Extra`);
+          headers.push(`${result.scenario.name} Current Threshold`);
           headers.push(`${result.scenario.name} Box 3`);
           headers.push(`${result.scenario.name} CIT`);
-          headers.push(`${result.scenario.name} Withholding`);
+          headers.push(`${result.scenario.name} Withholding (Div)`);
           headers.push(`${result.scenario.name} Box 2 Div`);
           headers.push(`${result.scenario.name} Box 2 Excess`);
           headers.push(`${result.scenario.name} Box 1`);
+          headers.push(`${result.scenario.name} Private bank end`);
+          headers.push(`${result.scenario.name} Private other end`);
+          headers.push(`${result.scenario.name} Private debt end`);
+          headers.push(`${result.scenario.name} BV cash end`);
+          headers.push(`${result.scenario.name} BV investments end`);
         }
         headers.push(`${result.scenario.name} End Private`);
         headers.push(`${result.scenario.name} End BV`);
@@ -1629,12 +2605,26 @@
           const endTotal = endPrivate + endBv;
           cells.push(`<td class="p-2 border">${formatCurrency(data.totalTax)}</td>`);
           if (showBreakdown) {
+            cells.push(`<td class="p-2 border">${formatCurrency(data.spendingNeedGross)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.netCashToPrivate)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.decision?.actual?.bvDividendGross ?? data.decision?.bvDividendGross ?? 0)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.withholdingTax)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.box2TaxOnDividendsDue)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.excessBorrowing.debtSum)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.excessBorrowing.headroom)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.thresholdExtra)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.excessBorrowing.currentThreshold)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.box3.box3Tax)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.cit.cit)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.withholdingTax)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.dividendTaxes.box2TaxOnDividendsDue)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.excessBorrowing.box2TaxOnExcessBorrowing)}</td>`);
             cells.push(`<td class="p-2 border">${formatCurrency(data.box1Tax)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.endBalances.privateBank)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.endBalances.privateOther)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.endBalances.privateDebt)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.endBalances.bvCash)}</td>`);
+            cells.push(`<td class="p-2 border">${formatCurrency(data.endBalances.bvInvestments)}</td>`);
           }
           cells.push(`<td class="p-2 border">${formatCurrency(endPrivate)}</td>`);
           cells.push(`<td class="p-2 border">${formatCurrency(endBv)}</td>`);
@@ -1645,6 +2635,15 @@
           return `
             <div class="border rounded p-2 mb-2">
               <div class="font-semibold text-xs">${result.scenario.name} — ${year}</div>
+              <div class="mt-2 text-xs border rounded bg-slate-50 p-2">
+                <div class="font-semibold">Decision Summary</div>
+                <div>Spending need gross: ${formatCurrency(detail.decision.spendingNeedGross)} (actual: ${formatCurrency(detail.decision.actual?.spendingNeedGross || 0)})</div>
+                <div>Dividend gross: ${formatCurrency(detail.decision.bvDividendGross)} (actual: ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)})</div>
+                <div>New BV loan: ${formatCurrency(detail.decision.bvNewLoanToPrivate)} (actual: ${formatCurrency(detail.decision.actual?.bvNewLoanToPrivate || 0)})</div>
+                <div>Loan repayment: ${formatCurrency(detail.decision.bvLoanRepaymentFromPrivate)} (actual: ${formatCurrency(detail.decision.actual?.bvLoanRepaymentFromPrivate || 0)})</div>
+                <div>DGA salary: ${detail.decision.dgaSalaryEnabled ? formatCurrency(detail.decision.dgaSalaryGross) : 'Off'}</div>
+                <div>Private → BV contribution: ${formatCurrency(detail.decision.privateToBVContribution)}</div>
+              </div>
               <div class="grid grid-cols-2 gap-2 text-xs mt-2">
                 <div>
                   <div class="font-semibold">Starting balances</div>
@@ -1655,22 +2654,31 @@
                   <div>BV investments: ${formatCurrency(detail.startBalances.bvInvestments)}</div>
                 </div>
                 <div>
+                  <div class="font-semibold">Decision Summary</div>
+                  <div>Spending need gross: ${formatCurrency(detail.decision.spendingNeedGross)}</div>
+                  <div>Private bank sell: ${formatCurrency(detail.decision.actual?.privateBankSell || 0)}</div>
+                  <div>Private other sell: ${formatCurrency(detail.decision.actual?.privateOtherSell || 0)}</div>
+                  <div>Dividend gross (actual): ${formatCurrency(detail.decision.actual?.bvDividendGross || 0)}</div>
+                  <div>New BV loan: ${formatCurrency(detail.decision.actual?.bvNewLoanToPrivate || 0)}</div>
+                  <div>Loan repayment: ${formatCurrency(detail.decision.actual?.bvLoanRepaymentFromPrivate || 0)}</div>
+                  <div>DGA salary: ${detail.decision.dgaSalaryEnabled ? formatCurrency(detail.decision.dgaSalaryGross) : 'Off'}</div>
+                  <div>Loan interest rate: ${formatPercent(detail.decision.interestRate)}</div>
+                  <div>Private → BV contribution: ${formatCurrency(detail.decision.privateToBVContribution)}</div>
+                  <div>Manual cashflow adj.: ${formatCurrency(detail.decision.manualCashflowAdjustment)}</div>
+                </div>
+                <div>
                   <div class="font-semibold">Returns applied</div>
-                  <div>Private bank: ${formatCurrency(detail.returns.privateBank)}</div>
-                  <div>Private other: ${formatCurrency(detail.returns.privateOther)}</div>
-                  <div>BV cash: ${formatCurrency(detail.returns.bvCash)}</div>
-                  <div>BV investments: ${formatCurrency(detail.returns.bvInvestments)}</div>
+                  <div>Private bank: ${formatCurrency(detail.returns.privateBank)} (x${(1 + detail.appliedReturns.privateBank).toFixed(2)})</div>
+                  <div>Private other: ${formatCurrency(detail.returns.privateOther)} (x${(1 + detail.appliedReturns.privateOther).toFixed(2)})</div>
+                  <div>BV cash: ${formatCurrency(detail.returns.bvCash)} (x${(1 + detail.appliedReturns.bvCash).toFixed(2)})</div>
+                  <div>BV investments: ${formatCurrency(detail.returns.bvInvestments)} (x${(1 + detail.appliedReturns.bvInvestments).toFixed(2)})</div>
                 </div>
                 <div>
                   <div class="font-semibold">Loan schedule</div>
                   <div>Interest received: ${formatCurrency(detail.loanFlow.interestReceived)}</div>
                   <div>Interest paid: ${formatCurrency(detail.loanFlow.interestPaid)}</div>
                   <div>Repayments: ${formatCurrency(detail.loanFlow.repayments)}</div>
-                </div>
-                <div>
-                  <div class="font-semibold">Drawdown</div>
-                  <div>Requested: ${formatCurrency(Object.values(detail.drawdown.desired).reduce((a, b) => a + b, 0))}</div>
-                  <div>Actual: ${formatCurrency(Object.values(detail.drawdown.actual).reduce((a, b) => a + b, 0))}</div>
+                  <div>New loans: ${formatCurrency(detail.loanFlow.newLoans)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Box 3</div>
@@ -1689,6 +2697,8 @@
                   <div>Pre-tax profit: ${formatCurrency(detail.cit.bvPreTaxProfit)}</div>
                   <div>CIT: ${formatCurrency(detail.cit.cit)}</div>
                   <div>After-tax profit: ${formatCurrency(detail.cit.bvAfterTaxProfit)}</div>
+                  <div>Loss carryforward used: ${formatCurrency(detail.cit.appliedCarryforward || 0)}</div>
+                  <div>Loss carryforward end: ${formatCurrency(detail.cit.lossCarryforwardEnd || 0)}</div>
                 </div>
                 <div>
                   <div class="font-semibold">Dividends</div>
@@ -1701,6 +2711,8 @@
                   <div class="font-semibold">Excessief lenen</div>
                   <div>Debt sum: ${formatCurrency(detail.excessBorrowing.debtSum)}</div>
                   <div>Threshold: ${formatCurrency(detail.excessBorrowing.currentThreshold)}</div>
+                  <div>Headroom: ${formatCurrency(detail.excessBorrowing.headroom)}</div>
+                  <div>Threshold extra: ${formatCurrency(detail.thresholdExtra)}</div>
                   <div>Excess amount: ${formatCurrency(detail.excessBorrowing.excessAmount)}</div>
                   <div>Box 2 on excess: ${formatCurrency(detail.excessBorrowing.box2TaxOnExcessBorrowing)}</div>
                 </div>
