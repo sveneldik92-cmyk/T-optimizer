@@ -241,6 +241,7 @@
       loans: [],
       decisionTimeline: {
         mode: 'policy',
+        viewMode: 'table',
         policy: {
           spendingNeedGross: 40000,
           drawdownSplit: {
@@ -280,15 +281,15 @@
           privateBankSell: true,
           privateOtherSell: true,
           bvDividendGross: true,
-          targetNetDividend: false,
+          targetNetDividend: true,
           bvNewLoanToPrivate: true,
           bvLoanRepaymentFromPrivate: true,
-          dgaSalaryGross: false,
+          dgaSalaryGross: true,
           dgaSalaryEnabled: false,
-          interestRate: false,
-          privateToBVContribution: false,
-          partnerDebtToBV: false,
-          connectedPersonsDebtToBV: false,
+          interestRate: true,
+          privateToBVContribution: true,
+          partnerDebtToBV: true,
+          connectedPersonsDebtToBV: true,
           returnOverride: false
         }
       },
@@ -441,6 +442,7 @@
       scenario.returns = { ...base.returns, ...(rawScenario.returns || {}) };
       scenario.assetMix = { ...base.assetMix, ...(rawScenario.assetMix || {}) };
       scenario.decisionTimeline = { ...base.decisionTimeline, ...(rawScenario.decisionTimeline || {}) };
+      scenario.decisionTimeline.viewMode = rawScenario.decisionTimeline?.viewMode || base.decisionTimeline.viewMode;
       scenario.decisionTimeline.policy = { ...base.decisionTimeline.policy, ...(rawScenario.decisionTimeline?.policy || {}) };
       scenario.decisionTimeline.policy.drawdownSplit = {
         ...base.decisionTimeline.policy.drawdownSplit,
@@ -463,6 +465,9 @@
         ...(rawScenario.decisionTimeline?.overrideColumns || {})
       };
       scenario.decisionTimeline.overrides = rawScenario.decisionTimeline?.overrides || {};
+      if (!scenario.decisionTimeline.viewMode) {
+        scenario.decisionTimeline.viewMode = base.decisionTimeline.viewMode;
+      }
 
       if (rawScenario.drawdownSimple && !rawScenario.decisionTimeline) {
         scenario.decisionTimeline.policy.spendingNeedGross = rawScenario.drawdownSimple.amount || 0;
@@ -1374,61 +1379,147 @@
         { key: 'bvCashReturnOverride', label: 'BV cash %' },
         { key: 'bvInvestmentsReturnOverride', label: 'BV inv. %' }
       ];
-      const activeColumns = columnDefs.filter((col) => timeline.overrideColumns[col.key]);
-      const columnToggles = columnDefs.map((col) => `
-        <label class="flex items-center gap-1">
-          <input type="checkbox" data-override-col="${col.key}" class="border" ${timeline.overrideColumns[col.key] ? 'checked' : ''} />
-          ${col.label}
-        </label>
-      `).join('');
-      const header = activeColumns.map((col) => `<th class="px-2 py-1 whitespace-nowrap">${col.label}</th>`).join('');
-      const rows = years.map((year) => {
-        const data = timeline.overrides[year] || {};
-        const cells = activeColumns.map((col) => {
-          if (col.type === 'checkbox') {
-            return `
-              <td class="px-2 py-1 text-center">
-                <input type="checkbox" data-override-year="${year}" data-override-field="${col.key}" class="border" ${data[col.key] ? 'checked' : ''} />
-              </td>
-            `;
-          }
-          const value = data[col.key] ?? '';
-          return `
-            <td class="px-2 py-1">
-              <input type="number" step="${col.key.includes('Return') || col.key === 'interestRate' ? '0.1' : '1'}" class="border rounded px-2 py-1 w-24" data-override-year="${year}" data-override-field="${col.key}" value="${value}" />
-            </td>
-          `;
-        }).join('');
-        return `
-          <tr class="border-b">
-            <td class="sticky left-0 bg-white px-2 py-1 font-semibold">${year}</td>
-            ${cells}
-          </tr>
-        `;
-      }).join('');
-
-      container.innerHTML = `
-        <div class="space-y-2">
-          <div class="flex flex-wrap gap-2 text-[11px]">${columnToggles}</div>
-          <div class="border rounded overflow-auto max-h-64">
-            <table class="min-w-full text-[11px]">
-              <thead class="sticky top-0 bg-slate-100">
-                <tr>
-                  <th class="px-2 py-1 sticky left-0 bg-slate-100">Year</th>
-                  ${header}
-                </tr>
-              </thead>
-              <tbody>
-                ${rows}
-              </tbody>
-            </table>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <button data-override-action="clear" class="text-xs border rounded px-2 py-1">Clear overrides</button>
-            <button data-override-action="copyPolicy" class="text-xs border rounded px-2 py-1">Fill spending from policy</button>
-          </div>
+      const columnByKey = Object.fromEntries(columnDefs.map((col) => [col.key, col]));
+      const viewMode = timeline.viewMode || 'table';
+      const viewToggle = `
+        <div class="flex items-center gap-2 text-[11px]">
+          <span class="text-slate-500">Overrides view</span>
+          <button data-override-view="table" class="border rounded px-2 py-1 ${viewMode === 'table' ? 'bg-slate-900 text-white' : ''}">Table</button>
+          <button data-override-view="form" class="border rounded px-2 py-1 ${viewMode === 'form' ? 'bg-slate-900 text-white' : ''}">Form</button>
         </div>
       `;
+
+      if (viewMode === 'form') {
+        const formSections = [
+          {
+            title: 'Spending & sources',
+            fields: ['spendingNeedGross', 'privateBankSell', 'privateOtherSell', 'bvDividendGross', 'targetNetDividend', 'bvNewLoanToPrivate', 'bvLoanRepaymentFromPrivate']
+          },
+          { title: 'Salary', fields: ['dgaSalaryEnabled', 'dgaSalaryGross'] },
+          { title: 'Loan rates & transfers', fields: ['interestRate', 'privateToBVContribution', 'partnerDebtToBV', 'connectedPersonsDebtToBV'] },
+          { title: 'Return overrides (%)', fields: ['privateBankReturnOverride', 'privateOtherReturnOverride', 'bvCashReturnOverride', 'bvInvestmentsReturnOverride'] }
+        ];
+        const yearCards = years.map((year, index) => {
+          const data = timeline.overrides[year] || {};
+          const overrideCount = Object.keys(data).filter((key) => data[key] !== null && data[key] !== '' && data[key] !== false).length;
+          const sectionsHtml = formSections.map((section) => {
+            const fields = section.fields.map((fieldKey) => {
+              const col = columnByKey[fieldKey];
+              if (!col) return '';
+              if (col.type === 'checkbox') {
+                return `
+                  <label class="flex items-center gap-2 text-xs">
+                    <input type="checkbox" data-override-year="${year}" data-override-field="${col.key}" class="border" ${data[col.key] ? 'checked' : ''} />
+                    ${col.label}
+                  </label>
+                `;
+              }
+              const value = data[col.key] ?? '';
+              const step = col.key.includes('Return') || col.key === 'interestRate' ? '0.1' : '1';
+              return `
+                <label class="space-y-1 text-xs">
+                  ${col.label}
+                  <input type="number" step="${step}" class="border rounded px-2 py-1 w-full" data-override-year="${year}" data-override-field="${col.key}" value="${value}" />
+                </label>
+              `;
+            }).join('');
+            return `
+              <div class="border rounded p-2 space-y-2">
+                <div class="text-xs font-semibold">${section.title}</div>
+                <div class="grid grid-cols-2 gap-2">${fields}</div>
+              </div>
+            `;
+          }).join('');
+          return `
+            <details class="border rounded" ${index === 0 ? 'open' : ''}>
+              <summary class="p-2 cursor-pointer font-semibold flex items-center justify-between">
+                <span>${year}</span>
+                <span class="text-[11px] text-slate-500">${overrideCount} override${overrideCount === 1 ? '' : 's'}</span>
+              </summary>
+              <div class="p-2 space-y-2">
+                ${sectionsHtml}
+              </div>
+            </details>
+          `;
+        }).join('');
+
+        container.innerHTML = `
+          <div class="space-y-2">
+            ${viewToggle}
+            <div class="text-[11px] text-slate-500">Use the form view to enter all CSV-style overrides without leaving the UI.</div>
+            <div class="space-y-2 max-h-80 overflow-auto">${yearCards}</div>
+            <div class="flex flex-wrap gap-2">
+              <button data-override-action="clear" class="text-xs border rounded px-2 py-1">Clear overrides</button>
+              <button data-override-action="copyPolicy" class="text-xs border rounded px-2 py-1">Fill spending from policy</button>
+            </div>
+          </div>
+        `;
+      } else {
+        const activeColumns = columnDefs.filter((col) => timeline.overrideColumns[col.key]);
+        const columnToggles = columnDefs.map((col) => `
+          <label class="flex items-center gap-1">
+            <input type="checkbox" data-override-col="${col.key}" class="border" ${timeline.overrideColumns[col.key] ? 'checked' : ''} />
+            ${col.label}
+          </label>
+        `).join('');
+        const header = activeColumns.map((col) => `<th class="px-2 py-1 whitespace-nowrap">${col.label}</th>`).join('');
+        const rows = years.map((year) => {
+          const data = timeline.overrides[year] || {};
+          const cells = activeColumns.map((col) => {
+            if (col.type === 'checkbox') {
+              return `
+                <td class="px-2 py-1 text-center">
+                  <input type="checkbox" data-override-year="${year}" data-override-field="${col.key}" class="border" ${data[col.key] ? 'checked' : ''} />
+                </td>
+              `;
+            }
+            const value = data[col.key] ?? '';
+            return `
+              <td class="px-2 py-1">
+                <input type="number" step="${col.key.includes('Return') || col.key === 'interestRate' ? '0.1' : '1'}" class="border rounded px-2 py-1 w-24" data-override-year="${year}" data-override-field="${col.key}" value="${value}" />
+              </td>
+            `;
+          }).join('');
+          return `
+            <tr class="border-b">
+              <td class="sticky left-0 bg-white px-2 py-1 font-semibold">${year}</td>
+              ${cells}
+            </tr>
+          `;
+        }).join('');
+
+        container.innerHTML = `
+          <div class="space-y-2">
+            ${viewToggle}
+            <div class="flex flex-wrap gap-2 text-[11px]">${columnToggles}</div>
+            <div class="border rounded overflow-auto max-h-64">
+              <table class="min-w-full text-[11px]">
+                <thead class="sticky top-0 bg-slate-100">
+                  <tr>
+                    <th class="px-2 py-1 sticky left-0 bg-slate-100">Year</th>
+                    ${header}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows}
+                </tbody>
+              </table>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button data-override-action="clear" class="text-xs border rounded px-2 py-1">Clear overrides</button>
+              <button data-override-action="copyPolicy" class="text-xs border rounded px-2 py-1">Fill spending from policy</button>
+            </div>
+          </div>
+        `;
+      }
+
+      container.querySelectorAll('[data-override-view]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          timeline.viewMode = btn.dataset.overrideView;
+          renderDecisionTimelineEditor(scenario);
+          saveProject();
+        });
+      });
 
       container.querySelectorAll('[data-override-col]').forEach((input) => {
         input.addEventListener('change', (event) => {
